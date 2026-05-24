@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+
+# Environment files — never commit real values
+.env
+.env.local
+.env.development
+.env.staging
+.env.production
+
+# TypeORM cache
+.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Jest cache
+.jest-cache/
+
+# TypeScript incremental compilation
+*.tsbuildinfo
+
+# Lock files — commit pnpm-lock.yaml, ignore alternatives
+yarn.lock
+package-lock.json

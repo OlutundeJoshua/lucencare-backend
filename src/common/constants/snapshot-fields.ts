@@ -4,18 +4,18 @@
 import { ConsentPurpose } from 'src/common/enums';
 
 export const SNAPSHOT_FIELDS: Record<ConsentPurpose, string[]> = {
-  [ConsentPurpose.NGO_FUNDING]: ['name', 'conditionTags', 'locationState', 'directContactShared'],
+  [ConsentPurpose.NGO_FUNDING]: ['name', 'conditionTags', 'address', 'directContactShared'],
   [ConsentPurpose.HMO_CARE]: [
     'name',
     'conditionTags',
-    'locationState',
+    'address',
     'membershipNumber',
     'medicationList',
   ],
   [ConsentPurpose.CLINICAL_RESEARCH_RECRUITMENT]: [
     'name',
     'conditionTags',
-    'locationState',
+    'address',
     'directContactShared',
     'medicationList',
   ],

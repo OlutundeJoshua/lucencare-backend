@@ -254,11 +254,12 @@ interface Patient extends BaseEntity {
   userId: string;              // char(26), UNIQUE, FK → users.id, NOT NULL
   hmoId?: string;              // char(26), FK → organizations.id, nullable — set server-side from JWT
   name: string;                // text, NOT NULL
-  phoneHash?: string;          // text, UNIQUE, nullable — SHA-256 of raw phone number (hashed client-side)
-  membershipNumber?: string;   // text, UNIQUE, nullable — HMO policy/card number
+  phone: string;               // text, UNIQUE, NOT NULL — stored as plain text, protected by auth guards + RLS
+  membershipNumber?: string;   // text, UNIQUE, nullable — supplemental HMO policy/card number
+  dateOfBirth?: string;        // date, nullable — ISO date YYYY-MM-DD
+  gender?: Gender;             // enum, nullable
+  address?: string;            // text, nullable — free-text full address (replaces locationState + locationLga)
   conditionTags: string[];     // text[], NOT NULL, default '{}'
-  locationState?: string;      // text, nullable — e.g. 'Lagos', 'Abuja'
-  locationLga?: string;        // text, nullable — local government area within the state, e.g. 'Eti-Osa'
   medicationList?: object[];   // jsonb, nullable — array of { name, rxnormCode?, dosage?, frequency? }
   directContactShared: boolean;// boolean, NOT NULL, default false
 }
@@ -266,21 +267,39 @@ interface Patient extends BaseEntity {
 
 **Indexes:**
 - `UNIQUE INDEX` on `user_id`
-- `UNIQUE INDEX` on `phone_hash` (WHERE phone_hash IS NOT NULL)
+- `UNIQUE INDEX` on `phone`
 - `UNIQUE INDEX` on `membership_number` (WHERE membership_number IS NOT NULL)
 - `INDEX` on `hmo_id`
-- `INDEX` on `location_state`
-- `INDEX` on `location_lga`
 - `GIN INDEX` on `condition_tags` — supports array overlap queries (`&&`)
 - `GIN INDEX` on `medication_list` — supports JSONB containment queries (`@>`)
 
 **Constraints:**
-- At least one of `phoneHash` or `membershipNumber` must be non-null (enforced at service layer + DTO refine)
-- `hmoId` is NEVER set from request body — always from `req.user.orgId` (JWT claim)
+- `phone` is required for all patients — not nullable
+- `hmoId` is NEVER set from the request body. For `POST /patients` it is set from `req.user.orgId`; for the link-request flow it is set only when the **patient** approves via `PATCH /patients/me/link-requests/:id`
 
 ---
 
-### 3.4 `care_events`
+### 3.4 `hmo_link_requests`
+
+**Purpose:** Tracks pending/actioned requests from HMO coordinators to link a self-registered patient to their organisation. The patient must explicitly approve before `patients.hmo_id` is set.
+
+```typescript
+interface HmoLinkRequest extends BaseEntity {
+  patientId: string;            // char(26), FK → patients.id, NOT NULL
+  orgId: string;                // char(26), FK → organizations.id, NOT NULL
+  status: HmoLinkRequestStatus; // enum: 'pending' | 'approved' | 'rejected', NOT NULL
+  expiresAt: Date;              // timestamptz, NOT NULL — pending requests expire after 7 days
+}
+```
+
+**Indexes:**
+- `INDEX` on `patient_id`
+- `INDEX` on `org_id`
+- Composite `INDEX` on `(patient_id, org_id, status)` — used for duplicate-pending check
+
+---
+
+### 3.5 `care_events`
 
 **Purpose:** Clinical events recorded by HMO coordinators for a patient.
 
@@ -677,13 +696,26 @@ interface StandardResponse<T> {
   email: string;                  // valid email
   password: string;               // min 8 chars
   name: string;
-  phoneHash?: string;             // SHA-256, hashed client-side before sending
-  membershipNumber?: string;
+  phone: string;                  // required; plain text sent over HTTPS
+  membershipNumber?: string;      // supplemental HMO identifier only
+  dateOfBirth?: string;           // ISO date YYYY-MM-DD, optional
+  gender?: Gender;                // optional
+  address?: string;               // optional free-text full address
   conditionTags: string[];
-  locationState?: string;
-  locationLga?: string;
   consentPurposes: ConsentPurpose[]; // min 1
-  // Refinement: phoneHash OR membershipNumber must be present
+}
+```
+
+**`ForgotPasswordDto` (Request)**
+```typescript
+{ email: string; }
+```
+
+**`ResetPasswordDto` (Request)**
+```typescript
+{
+  token: string;    // 64-char hex token from the reset email link
+  password: string; // min 8 chars
 }
 ```
 
@@ -741,11 +773,12 @@ interface StandardResponse<T> {
 ```typescript
 {
   name: string;
-  phoneHash?: string;
-  membershipNumber?: string;
+  phone: string;                  // required
+  membershipNumber?: string;      // supplemental HMO identifier
+  dateOfBirth?: string;           // ISO date YYYY-MM-DD
+  gender?: Gender;
+  address?: string;
   conditionTags: string[];
-  locationState?: string;
-  locationLga?: string;
   medicationList?: Array<{
     name: string;
     rxnormCode?: string;
@@ -760,9 +793,11 @@ interface StandardResponse<T> {
 ```typescript
 {
   name?: string;
+  phone?: string;
   conditionTags?: string[];
-  locationState?: string;
-  locationLga?: string;
+  dateOfBirth?: string;
+  gender?: Gender;
+  address?: string;
   medicationList?: Array<{ name: string; rxnormCode?: string; dosage?: string; frequency?: string }>;
   directContactShared?: boolean;
 }
@@ -771,9 +806,10 @@ interface StandardResponse<T> {
 **`LookupPatientDto` (Request) — HMO coordinator only**
 ```typescript
 {
-  phoneHash?: string;
+  phone?: string;
   membershipNumber?: string;
-  // Refinement: at least one must be present
+  // At least one must be present. Searches globally — no hmo_id filter.
+  // Patient must have active HMO_CARE consent to be returned.
 }
 ```
 
@@ -783,9 +819,11 @@ interface StandardResponse<T> {
   data: {
     id: string;
     name: string;
+    phone: string;                // returned to patient (own profile) and hmo_coordinator
     conditionTags: string[];
-    locationState?: string;
-    locationLga?: string;
+    dateOfBirth?: string;
+    gender?: Gender;
+    address?: string;
     membershipNumber?: string;    // returned to HMO coordinator only
     hmoId?: string;
     directContactShared: boolean;
@@ -1082,6 +1120,8 @@ interface StandardResponse<T> {
 - On logout: add refresh `jti` to Redis revocation set with remaining TTL
 - On token refresh: check `jti` against revocation set before issuing new tokens
 - Trigger `send_otp` queue job on researcher registration
+- Forgot password: generate reset token, store in Redis (`reset:{token}` → userId, TTL 1h), trigger `send_reset_password` mail job
+- Reset password: consume reset token atomically via `redis.getdel`, update `password_hash`
 
 **Does NOT own:** consent creation beyond initial registration; patient health data.
 
@@ -1234,6 +1274,8 @@ Auth column: `—` = public, `JWT` = any valid token, role name = specific role 
 | POST | /auth/login | — | Login, returns access token + refresh cookie |
 | POST | /auth/refresh | Refresh Cookie | Rotate access + refresh tokens |
 | POST | /auth/logout | JWT | Clear refresh cookie |
+| POST | /auth/forgot-password | — | Request password reset email |
+| POST | /auth/reset-password | — | Complete password reset with token |
 
 ---
 
@@ -1243,8 +1285,11 @@ Auth column: `—` = public, `JWT` = any valid token, role name = specific role 
 |---|---|---|---|
 | GET | /patients/me | `patient` | Get own profile |
 | PATCH | /patients/me | `patient` | Update own profile |
-| GET | /patients/lookup | `hmo_coordinator` | Lookup patient by phoneHash or membershipNumber (org-scoped) |
-| POST | /patients | `hmo_coordinator` | Create patient record (org-scoped) |
+| GET | /patients/lookup | `hmo_coordinator` | Lookup patient by phone or membershipNumber (global, requires HMO_CARE consent) |
+| POST | /patients | `hmo_coordinator` | Create patient record (sets hmoId from JWT) |
+| POST | /patients/:id/link-request | `hmo_coordinator` | Send a link request to a self-registered patient (patient must approve) |
+| GET | /patients/me/link-requests | `patient` | List own link requests (filter by status) |
+| PATCH | /patients/me/link-requests/:requestId | `patient` | Approve or reject a pending link request |
 | GET | /patients/:id | `hmo_coordinator` | Get patient detail (org-scoped) |
 | GET | /patients/:id/events | `hmo_coordinator` | List care events — paginated (org-scoped) |
 | POST | /patients/:id/events | `hmo_coordinator` | Add care event (org-scoped) |
@@ -1396,7 +1441,7 @@ Response: StandardResponse<CareEvent[]> + meta.cursor
 | # | Rule |
 |---|---|
 | R-01 | Patient registration is a **single atomic transaction**: `users` row + `patients` row + one `consent_grant` per requested purpose. Any failure rolls back entirely. |
-| R-02 | Raw phone numbers are **never sent to the server**. Only the SHA-256 hash is transmitted, stored, and compared. |
+| R-02 | Phone numbers are transmitted as plain text over HTTPS and stored as plain text. Access is protected at the API layer by JWT auth guards (patients see their own; HMO coordinators see linked patients). Phone is not a credential — hashing is not required. |
 | R-03 | A researcher's institutional email domain must be validated server-side against a whitelist or MX record check. |
 | R-04 | An org registration creates both a `users` row and an `organizations` row. The org starts in `pending_verification` and the user in `pending` status. Neither can take org-scoped actions until admin approves. |
 
@@ -1405,7 +1450,7 @@ Response: StandardResponse<CareEvent[]> + meta.cursor
 | # | Rule |
 |---|---|
 | A-01 | `orgId` and `hmoId` are **never accepted from the request body**. They are always read from `req.user.orgId` (JWT claim). |
-| A-02 | HMO coordinators can only access patients where `patients.hmo_id = req.user.orgId`. |
+| A-02 | HMO coordinators can look up patients globally via `GET /patients/lookup` only if the patient has an active `HMO_CARE` consent grant. All other patient endpoints (`GET /patients/:id`, care events, summary) enforce `patients.hmo_id = req.user.orgId`. |
 | A-03 | NGO admins can only access programs where `programs.org_id = req.user.orgId`. |
 | A-04 | Researchers can only access studies where `studies.researcher_id = req.user.sub`. |
 | A-05 | Patients can only access their own consents, enrollments, and notifications. |
@@ -1423,7 +1468,7 @@ Response: StandardResponse<CareEvent[]> + meta.cursor
 | C-03 | Consent state machine transitions are strictly enforced: no skipping states, no exiting `REVOKED`. |
 | C-04 | `sharedDataSnapshot` on `enrollments` is a **point-in-time copy** of only consented fields, captured at enrollment time. Orgs always read from this snapshot — never from a live join to `patients`. |
 | C-05 | `directContactShared` on `study_enrollments` defaults to `false` and requires an **explicit patient boolean** set to `true`. It is never inferred from any other action. |
-| C-06 | The mapping from `ConsentPurpose` to the patient fields included in `sharedDataSnapshot` is the **single source of truth** defined in `src/common/constants/snapshot-fields.ts`. No service may define its own field list. The canonical mapping is: `ngo_funding → ['name', 'conditionTags', 'locationState', 'directContactShared']` · `hmo_care → ['name', 'conditionTags', 'locationState', 'membershipNumber', 'medicationList']` · `clinical_research_recruitment → ['name', 'conditionTags', 'locationState', 'directContactShared', 'medicationList']`. |
+| C-06 | The mapping from `ConsentPurpose` to the patient fields included in `sharedDataSnapshot` is the **single source of truth** defined in `src/common/constants/snapshot-fields.ts`. No service may define its own field list. The canonical mapping is: `ngo_funding → ['name', 'conditionTags', 'address', 'directContactShared']` · `hmo_care → ['name', 'conditionTags', 'address', 'membershipNumber', 'medicationList']` · `clinical_research_recruitment → ['name', 'conditionTags', 'address', 'directContactShared', 'medicationList']`. |
 
 ### 8.4 Matching & Privacy
 
@@ -1547,7 +1592,7 @@ All errors are returned as [RFC 7807 Problem Detail](https://datatracker.ietf.or
 - Every request generates a `traceId` (UUID v4) in `ClsService` at the start of the request lifecycle.
 - `traceId` is attached to every log line and every HTTP response.
 - Log levels: `error` for thrown exceptions, `warn` for auth failures and cross-org attempts, `info` for audit-worthy actions, `debug` for service internals (disabled in production).
-- Sensitive fields are **never logged**: `passwordHash`, `phoneHash`, JWT payloads, `sharedDataSnapshot`.
+- Sensitive fields are **never logged**: `passwordHash`, patient `phone`, JWT payloads, `sharedDataSnapshot`.
 
 ### 10.4 Rate Limiting
 

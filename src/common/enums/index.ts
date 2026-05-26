@@ -66,11 +66,24 @@ export enum StudyEnrollmentStatus {
   WITHDRAWN = 'withdrawn',
 }
 
+export enum Gender {
+  MALE = 'male',
+  FEMALE = 'female',
+  OTHER = 'other',
+  PREFER_NOT_TO_SAY = 'prefer_not_to_say',
+}
+
 export enum CareEventType {
   CLINIC_VISIT = 'clinic_visit',
   LAB_RESULT = 'lab_result',
   PRESCRIPTION = 'prescription',
   REFERRAL = 'referral',
+}
+
+export enum HmoLinkRequestStatus {
+  PENDING = 'pending',
+  APPROVED = 'approved',
+  REJECTED = 'rejected',
 }
 
 export enum NotificationType {
@@ -80,6 +93,7 @@ export enum NotificationType {
   NEW_MESSAGE = 'new_message',
   STUDY_MATCH = 'study_match',
   ORG_VERIFIED = 'org_verified',
+  HMO_LINK_REQUEST = 'hmo_link_request',
 }
 
 export enum AuditAction {

@@ -7,6 +7,8 @@ import {
   RegisterOrgDto,
   RegisterResearcherDto,
   LoginDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
 } from './dto/auth.dto';
 
 @Injectable()
@@ -38,6 +40,19 @@ export class AuthService {
 
   async logout() {
     // Writes refresh jti to Redis revocation set
+    throw new Error('Not implemented');
+  }
+
+  async forgotPassword(_dto: ForgotPasswordDto) {
+    // Generates reset token, stores in Redis (reset:{token} → userId, TTL 1h),
+    // enqueues send_reset_password mail job.
+    // Always returns 200 regardless of whether email exists.
+    throw new Error('Not implemented');
+  }
+
+  async resetPassword(_dto: ResetPasswordDto) {
+    // redis.getdel('reset:{token}') → userId (single-use enforcement).
+    // Hashes new password with bcrypt cost 12, updates users.password_hash.
     throw new Error('Not implemented');
   }
 }

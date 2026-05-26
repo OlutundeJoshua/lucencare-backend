@@ -3,46 +3,41 @@
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsISO8601,
   IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
   MaxLength,
-  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-import { CareEventType } from 'src/common/enums';
+import { CareEventType, Gender, HmoLinkRequestStatus } from 'src/common/enums';
 
 export class MedicationItemDto {
-  @ApiProperty() @IsString() @IsNotEmpty() name: string;
+  @ApiProperty() @IsString() @IsNotEmpty() name!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() rxnormCode?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() dosage?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() frequency?: string;
 }
 
 export class CreatePatientDto {
-  @ApiProperty() @IsString() @IsNotEmpty() name: string;
+  @ApiProperty() @IsString() @IsNotEmpty() name!: string;
 
-  @ApiPropertyOptional({ description: 'SHA-256 hex hash of phone number (64 chars)' })
-  @IsOptional()
-  @IsString()
-  phoneHash?: string;
+  @ApiProperty() @IsString() @IsNotEmpty() phone!: string;
 
-  @ApiPropertyOptional()
-  @ValidateIf((o) => !o.phoneHash)
-  @IsNotEmpty({ message: 'At least one of phoneHash or membershipNumber is required' })
-  @IsString()
-  membershipNumber?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() membershipNumber?: string;
 
-  @ApiProperty({ type: [String] }) @IsString({ each: true }) conditionTags: string[];
+  @ApiPropertyOptional() @IsOptional() @IsISO8601({ strict: true }) dateOfBirth?: string;
 
-  @ApiPropertyOptional() @IsOptional() @IsString() locationState?: string;
+  @ApiPropertyOptional({ enum: Gender }) @IsOptional() @IsEnum(Gender) gender?: Gender;
 
-  @ApiPropertyOptional() @IsOptional() @IsString() locationLga?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() address?: string;
+
+  @ApiProperty({ type: [String] }) @IsString({ each: true }) conditionTags!: string[];
 
   @ApiPropertyOptional({ type: [MedicationItemDto] })
   @IsOptional()
@@ -54,14 +49,18 @@ export class CreatePatientDto {
 export class UpdatePatientDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @IsNotEmpty() name?: string;
 
+  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+
   @ApiPropertyOptional({ type: [String] })
   @IsOptional()
   @IsString({ each: true })
   conditionTags?: string[];
 
-  @ApiPropertyOptional() @IsOptional() @IsString() locationState?: string;
+  @ApiPropertyOptional() @IsOptional() @IsISO8601({ strict: true }) dateOfBirth?: string;
 
-  @ApiPropertyOptional() @IsOptional() @IsString() locationLga?: string;
+  @ApiPropertyOptional({ enum: Gender }) @IsOptional() @IsEnum(Gender) gender?: Gender;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() address?: string;
 
   @ApiPropertyOptional({ type: [MedicationItemDto] })
   @IsOptional()
@@ -73,26 +72,38 @@ export class UpdatePatientDto {
 }
 
 export class LookupPatientDto {
-  @ApiPropertyOptional({ description: 'SHA-256 hex hash of phone number' })
+  @ApiPropertyOptional({ description: 'Patient phone number' })
   @IsOptional()
   @IsString()
-  phoneHash?: string;
+  phone?: string;
 
   @ApiPropertyOptional()
-  @ValidateIf((o) => !o.phoneHash)
-  @IsNotEmpty({ message: 'At least one of phoneHash or membershipNumber is required' })
+  @IsOptional()
   @IsString()
   membershipNumber?: string;
 }
 
-export class CreateCareEventDto {
-  @ApiProperty({ enum: CareEventType }) @IsEnum(CareEventType) type: CareEventType;
+export class RespondToLinkRequestDto {
+  @ApiProperty({ enum: ['approve', 'reject'] })
+  @IsIn(['approve', 'reject'])
+  action!: 'approve' | 'reject';
+}
 
-  @ApiProperty({ description: 'ISO date (YYYY-MM-DD)' }) @IsISO8601() eventDate: string;
+export class ListLinkRequestsQueryDto {
+  @ApiPropertyOptional({ enum: HmoLinkRequestStatus })
+  @IsOptional()
+  @IsEnum(HmoLinkRequestStatus)
+  status?: HmoLinkRequestStatus;
+}
+
+export class CreateCareEventDto {
+  @ApiProperty({ enum: CareEventType }) @IsEnum(CareEventType) type!: CareEventType;
+
+  @ApiProperty({ description: 'ISO date (YYYY-MM-DD)' }) @IsISO8601() eventDate!: string;
 
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(200) providerName?: string;
 
-  @ApiProperty({ description: 'Type-specific structured data' }) @IsObject() structured: Record<string, unknown>;
+  @ApiProperty({ description: 'Type-specific structured data' }) @IsObject() structured!: Record<string, unknown>;
 
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(2000) notes?: string;
 }

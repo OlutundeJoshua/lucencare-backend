@@ -4,7 +4,13 @@ import { Controller, Get, Post, Patch, Body, Param, Query } from '@nestjs/common
 
 import { PatientsService } from './patients.service';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
-import { UpdatePatientDto, LookupPatientDto, CreateCareEventDto } from './dto/patient.dto';
+import {
+  UpdatePatientDto,
+  LookupPatientDto,
+  CreateCareEventDto,
+  RespondToLinkRequestDto,
+  ListLinkRequestsQueryDto,
+} from './dto/patient.dto';
 
 @Controller('patients')
 export class PatientsController {
@@ -20,9 +26,27 @@ export class PatientsController {
     return this.patientsService.updateMyProfile(dto);
   }
 
+  @Get('me/link-requests')
+  getMyLinkRequests(@Query() query: ListLinkRequestsQueryDto) {
+    return this.patientsService.getMyLinkRequests(query.status);
+  }
+
+  @Patch('me/link-requests/:requestId')
+  respondToLinkRequest(
+    @Param('requestId') requestId: string,
+    @Body() dto: RespondToLinkRequestDto,
+  ) {
+    return this.patientsService.respondToLinkRequest(requestId, dto.action);
+  }
+
   @Get('lookup')
   lookup(@Query() dto: LookupPatientDto) {
     return this.patientsService.lookup(dto);
+  }
+
+  @Post(':id/link-request')
+  createLinkRequest(@Param('id') id: string) {
+    return this.patientsService.createLinkRequest(id);
   }
 
   @Get(':id')

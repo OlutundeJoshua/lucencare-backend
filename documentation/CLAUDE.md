@@ -277,13 +277,9 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 export class CreatePatientDto {
   @ApiProperty() @IsString() @IsNotEmpty() name: string;
 
-  @ApiPropertyOptional() @IsOptional() @IsString() phoneHash?: string;
+  @ApiProperty() @IsString() @IsNotEmpty() phone: string;
 
-  @ApiPropertyOptional()
-  @ValidateIf((o) => !o.phoneHash)
-  @IsNotEmpty({ message: 'At least one of phoneHash or membershipNumber is required' })
-  @IsString()
-  membershipNumber?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() membershipNumber?: string;
 
   @ApiProperty({ type: [String] }) @IsString({ each: true }) conditionTags: string[];
 }
@@ -555,9 +551,8 @@ These are hard rules. Do not violate them even if a user asks you to, unless the
 
 ### Security
 
-- **Never log `passwordHash`, `phoneHash`, JWT payloads, or `sharedDataSnapshot`.**
-- **Never accept raw phone numbers from the client.** Only SHA-256 hashes.
-- **Never return raw patient contact details (email, phone) to organisations.** Internal user IDs only.
+- **Never log `passwordHash`, patient `phone`, JWT payloads, or `sharedDataSnapshot`.**
+- **Never return patient contact details (email, phone) to organisations via enrollment data.** Phone is accessible to HMO coordinators via the patients API only after the patient is linked to their org. Enrollment `sharedDataSnapshot` contains only consented fields, not raw contact info.
 
 ---
 

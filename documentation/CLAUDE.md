@@ -650,11 +650,23 @@ Patient action (`POST /study-enrollments`) lives in `EnrollmentsModule`; researc
 
 `JwtAuthGuard` extends `AuthGuard('jwt')` but neither `PassportModule`, `passport`, `passport-jwt`, nor `JwtStrategy` are in the scaffold. These are intentionally deferred — JWT payload shape decisions affect the strategy. When implementing auth, add `@nestjs/passport ^10.0.3`, `passport ^0.7.0`, `passport-jwt ^4.0.1`, `@types/passport-jwt ^4.0.1` and create `src/modules/auth/strategies/jwt.strategy.ts`.
 
-### 10.7 `common/constants/` Privacy Boundary
+### 10.7 `strictPropertyInitialization` Disabled Intentionally
+
+`tsconfig.json` sets `"strictPropertyInitialization": false`. This is a deliberate project-wide decision, not an oversight.
+
+TypeORM entities and NestJS DTO classes are populated by the framework at runtime — TypeORM hydrates entity columns from DB rows, and `class-transformer` hydrates DTO fields from the request body. TypeScript cannot see these runtime assignments, so `strictPropertyInitialization: true` would require `!` on every column and DTO field, which is noise without safety value.
+
+The real runtime guarantees come from two other layers that are always in place:
+- **DTOs**: `class-validator` decorators + global `ValidationPipe` — a request with a missing required field is rejected before it reaches a controller.
+- **Entities**: TypeORM column definitions + database NOT NULL and FK constraints — missing required data is rejected at the DB level.
+
+Do not re-enable `strictPropertyInitialization` and do not add `!` assertions to entity columns or DTO fields. All other strict flags remain on.
+
+### 10.8 `common/constants/` Privacy Boundary
 
 `src/common/constants/snapshot-fields.ts` is the single source of truth for the `ConsentPurpose → patient fields` mapping. No service may define its own field list. This file has no imports from other `src/` paths — it imports only from `src/common/enums` — making it safe to import from any module without creating circular dependencies.
 
 ---
 
-*LucenCare Backend — CLAUDE.md v4*  
+*LucenCare Backend — CLAUDE.md v5*  
 *Read ARCHITECTURE.md for full entity schemas, API contracts, and business rules.*

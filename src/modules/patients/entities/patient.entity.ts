@@ -11,16 +11,16 @@ import { Gender } from 'src/common/enums';
 @Index(['phone'])
 export class Patient extends BaseEntity {
   @Column({ name: 'user_id', type: 'char', length: 26, unique: true })
-  userId!: string;
+  userId: string;
 
   @Column({ name: 'hmo_id', type: 'char', length: 26, nullable: true })
   hmoId?: string;
 
   @Column({ name: 'name', type: 'text' })
-  name!: string;
+  name: string;
 
   @Column({ name: 'phone', type: 'text', unique: true })
-  phone!: string;
+  phone: string;
 
   @Column({ name: 'membership_number', type: 'text', nullable: true, unique: true })
   membershipNumber?: string;
@@ -35,11 +35,11 @@ export class Patient extends BaseEntity {
   address?: string;
 
   @Column({ name: 'condition_tags', type: 'text', array: true, default: '{}' })
-  conditionTags!: string[];
+  conditionTags: string[];
 
   @Column({ name: 'medication_list', type: 'jsonb', nullable: true })
   medicationList?: object[];
 
   @Column({ name: 'direct_contact_shared', type: 'boolean', default: false })
-  directContactShared!: boolean;
+  directContactShared: boolean;
 }

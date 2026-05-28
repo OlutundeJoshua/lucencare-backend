@@ -18,16 +18,16 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CareEventType, Gender, HmoLinkRequestStatus } from 'src/common/enums';
 
 export class MedicationItemDto {
-  @ApiProperty() @IsString() @IsNotEmpty() name!: string;
+  @ApiProperty() @IsString() @IsNotEmpty() name: string;
   @ApiPropertyOptional() @IsOptional() @IsString() rxnormCode?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() dosage?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() frequency?: string;
 }
 
 export class CreatePatientDto {
-  @ApiProperty() @IsString() @IsNotEmpty() name!: string;
+  @ApiProperty() @IsString() @IsNotEmpty() name: string;
 
-  @ApiProperty() @IsString() @IsNotEmpty() phone!: string;
+  @ApiProperty() @IsString() @IsNotEmpty() phone: string;
 
   @ApiPropertyOptional() @IsOptional() @IsString() membershipNumber?: string;
 
@@ -37,7 +37,7 @@ export class CreatePatientDto {
 
   @ApiPropertyOptional() @IsOptional() @IsString() address?: string;
 
-  @ApiProperty({ type: [String] }) @IsString({ each: true }) conditionTags!: string[];
+  @ApiProperty({ type: [String] }) @IsString({ each: true }) conditionTags: string[];
 
   @ApiPropertyOptional({ type: [MedicationItemDto] })
   @IsOptional()
@@ -86,7 +86,7 @@ export class LookupPatientDto {
 export class RespondToLinkRequestDto {
   @ApiProperty({ enum: ['approve', 'reject'] })
   @IsIn(['approve', 'reject'])
-  action!: 'approve' | 'reject';
+  action: 'approve' | 'reject';
 }
 
 export class ListLinkRequestsQueryDto {
@@ -97,13 +97,13 @@ export class ListLinkRequestsQueryDto {
 }
 
 export class CreateCareEventDto {
-  @ApiProperty({ enum: CareEventType }) @IsEnum(CareEventType) type!: CareEventType;
+  @ApiProperty({ enum: CareEventType }) @IsEnum(CareEventType) type: CareEventType;
 
-  @ApiProperty({ description: 'ISO date (YYYY-MM-DD)' }) @IsISO8601() eventDate!: string;
+  @ApiProperty({ description: 'ISO date (YYYY-MM-DD)' }) @IsISO8601() eventDate: string;
 
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(200) providerName?: string;
 
-  @ApiProperty({ description: 'Type-specific structured data' }) @IsObject() structured!: Record<string, unknown>;
+  @ApiProperty({ description: 'Type-specific structured data' }) @IsObject() structured: Record<string, unknown>;
 
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(2000) notes?: string;
 }

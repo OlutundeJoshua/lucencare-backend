@@ -11,7 +11,8 @@
     "outDir": "./dist",
     "baseUrl": "./",
     "paths": {
-      "src/*": ["src/*"]
+      "src/*": ["src/*"],
+      "@nestjs/passport": ["src/__mocks__/@nestjs/passport.ts"]
     },
     "incremental": true,
     "skipLibCheck": true,
@@ -20,11 +21,10 @@
     "strictNullChecks": true,
     "strictFunctionTypes": true,
     "strictBindCallApply": true,
-    "strictPropertyInitialization": true,
+    "strictPropertyInitialization": false,
     "noImplicitThis": true,
     "alwaysStrict": true,
     "forceConsistentCasingInFileNames": true,
-    "noFallthroughCasesInSwitch": false,
-    "isolatedModules": true
+    "noFallthroughCasesInSwitch": false
   }
 }

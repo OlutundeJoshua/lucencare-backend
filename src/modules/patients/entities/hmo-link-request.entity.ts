@@ -9,10 +9,10 @@ import { HmoLinkRequestStatus } from 'src/common/enums';
 @Index(['patientId', 'orgId', 'status'])
 export class HmoLinkRequest extends BaseEntity {
   @Column({ name: 'patient_id', type: 'char', length: 26 })
-  patientId!: string;
+  patientId: string;
 
   @Column({ name: 'org_id', type: 'char', length: 26 })
-  orgId!: string;
+  orgId: string;
 
   @Column({
     name: 'status',
@@ -20,8 +20,8 @@ export class HmoLinkRequest extends BaseEntity {
     enum: HmoLinkRequestStatus,
     default: HmoLinkRequestStatus.PENDING,
   })
-  status!: HmoLinkRequestStatus;
+  status: HmoLinkRequestStatus;
 
   @Column({ name: 'expires_at', type: 'timestamptz' })
-  expiresAt!: Date;
+  expiresAt: Date;
 }

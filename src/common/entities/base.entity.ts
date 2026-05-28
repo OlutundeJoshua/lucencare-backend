@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/entities.md
-
 import { ulid } from 'ulid';
 
 import {
@@ -13,13 +11,13 @@ import {
 
 export abstract class BaseEntity {
   @PrimaryColumn({ type: 'char', length: 26 })
-  id: string;
+  id!: string;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
-  updatedAt: Date;
+  updatedAt!: Date;
 
   @DeleteDateColumn({ name: 'deleted_at', type: 'timestamptz', nullable: true })
   deletedAt?: Date;

@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/guards.md
-
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 

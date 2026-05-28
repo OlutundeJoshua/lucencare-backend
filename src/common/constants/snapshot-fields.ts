@@ -1,4 +1,3 @@
-// TODO: Implement — see docs/modules/consents.md
 // Single source of truth: ConsentPurpose → patient fields included in sharedDataSnapshot
 
 import { ConsentPurpose } from 'src/common/enums';

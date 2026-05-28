@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/config.md
-
 import { registerAs } from '@nestjs/config';
 
 export default registerAs('jwt', () => ({

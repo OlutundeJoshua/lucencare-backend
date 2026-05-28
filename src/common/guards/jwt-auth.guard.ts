@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/guards.md
-
 import { Injectable, ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ClsService } from 'nestjs-cls';
@@ -14,10 +12,11 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     return super.canActivate(context);
   }
 
-  handleRequest<TUser>(err: Error, user: TUser): TUser {
+  handleRequest<TUser extends { sub: string }>(err: Error, user: TUser): TUser {
     if (err || !user) {
       throw err || new UnauthorizedException('Missing or expired JWT');
     }
+    this.cls.set('userId', user.sub);
     return user;
   }
 }

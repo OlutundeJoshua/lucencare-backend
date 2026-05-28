@@ -1,11 +1,8 @@
-// TODO: Implement — see docs/modules/main.md
-
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { UnprocessableEntityException, ValidationPipe } from '@nestjs/common';
 import { Logger } from 'nestjs-pino';
 import helmet from 'helmet';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-
 import { ConfigService } from '@nestjs/config';
 
 import { AppModule } from './app.module';
@@ -40,13 +37,19 @@ async function bootstrap() {
       transform: true,
       forbidNonWhitelisted: true,
       transformOptions: { enableImplicitConversion: true },
+      exceptionFactory: (errors) =>
+        new UnprocessableEntityException({
+          errors: errors.map((e) => ({
+            path: e.property,
+            message: Object.values(e.constraints ?? {}).join('; '),
+          })),
+        }),
     }),
   );
 
-  // TODO: Fix DI gap — use app.get(GlobalExceptionFilter) + add to AppModule.providers (see CLAUDE.md §10.3)
-  app.useGlobalFilters(new GlobalExceptionFilter());
-  // TODO: Fix DI gap — use app.get(TransformInterceptor) + add to AppModule.providers (see CLAUDE.md §10.3)
-  app.useGlobalInterceptors(new TransformInterceptor());
+  // Use app.get() so NestJS DI injects ClsService into both (fixes the DI gap from scaffold)
+  app.useGlobalFilters(app.get(GlobalExceptionFilter));
+  app.useGlobalInterceptors(app.get(TransformInterceptor));
 
   if (configService.get<string>('app.nodeEnv') !== 'production') {
     const swaggerConfig = new DocumentBuilder()

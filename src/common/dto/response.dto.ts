@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/dto.md
-
 export interface StandardResponse<T> {
   data: T;
   meta?: {

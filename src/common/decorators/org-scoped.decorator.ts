@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/decorators.md
-
 import { SetMetadata } from '@nestjs/common';
 
 export const ORG_SCOPED_KEY = 'orgScoped';

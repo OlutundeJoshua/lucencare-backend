@@ -1,4 +1,4 @@
-// TODO: Implement — see docs/modules/interceptors.md
+// Stub — will be implemented when AuditModule is available for injection
 
 import { Injectable, NestInterceptor, ExecutionContext, CallHandler } from '@nestjs/common';
 import { Observable } from 'rxjs';

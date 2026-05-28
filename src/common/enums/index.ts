@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/enums.md
-
 export enum UserRole {
   PATIENT = 'patient',
   NGO_ADMIN = 'ngo_admin',

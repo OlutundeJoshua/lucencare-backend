@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/subscribers.md
-
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { ClsService } from 'nestjs-cls';

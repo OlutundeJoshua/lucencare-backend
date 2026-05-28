@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/health.md
-
 import { Controller, Get } from '@nestjs/common';
 import { HealthCheck, HealthCheckService, TypeOrmHealthIndicator } from '@nestjs/terminus';
 

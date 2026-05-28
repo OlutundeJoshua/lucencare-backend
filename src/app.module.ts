@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/app.md
-
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -11,6 +9,10 @@ import { ThrottlerStorageRedisService } from 'nestjs-throttler-storage-redis';
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import jwtConfig from './config/jwt.config';
+
+import { CommonModule } from './common/common.module';
+import { TransformInterceptor } from './common/interceptors/transform.interceptor';
+import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { PatientsModule } from './modules/patients/patients.module';
@@ -75,6 +77,7 @@ import { HealthModule } from './health/health.module';
       middleware: { mount: true },
     }),
 
+    CommonModule,
     AuthModule,
     PatientsModule,
     OrganizationsModule,
@@ -91,5 +94,6 @@ import { HealthModule } from './health/health.module';
     QueuesModule,
     HealthModule,
   ],
+  providers: [TransformInterceptor, GlobalExceptionFilter],
 })
 export class AppModule {}

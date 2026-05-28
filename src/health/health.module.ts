@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/health.md
-
 import { Module } from '@nestjs/common';
 import { TerminusModule } from '@nestjs/terminus';
 

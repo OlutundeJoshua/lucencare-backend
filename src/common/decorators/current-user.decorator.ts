@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/decorators.md
-
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 
 export interface JwtPayload {

@@ -11,8 +11,7 @@
     "outDir": "./dist",
     "baseUrl": "./",
     "paths": {
-      "src/*": ["src/*"],
-      "@nestjs/passport": ["src/__mocks__/@nestjs/passport.ts"]
+      "src/*": ["src/*"]
     },
     "incremental": true,
     "skipLibCheck": true,

@@ -1,6 +1,5 @@
-// TODO: Implement — see docs/modules/auth.md
-
 import {
+  ArrayMinSize,
   IsArray,
   IsEmail,
   IsEnum,
@@ -43,6 +42,7 @@ export class RegisterPatientDto {
 
   @ApiProperty({ enum: ConsentPurpose, isArray: true })
   @IsArray()
+  @ArrayMinSize(1)
   @IsEnum(ConsentPurpose, { each: true })
   consentPurposes: ConsentPurpose[];
 }
@@ -70,13 +70,22 @@ export class RegisterResearcherDto {
 
   @ApiProperty() @IsString() @IsNotEmpty() institutionName: string;
 
-  @ApiProperty({ description: '6-digit OTP code' }) @IsString() @Length(6) otpCode: string;
+  @ApiProperty({ description: '6-digit OTP code' })
+  @IsString()
+  @Length(6, 6)
+  otpCode: string;
 }
 
 export class LoginDto {
   @ApiProperty() @IsEmail() email: string;
 
   @ApiProperty() @IsString() @IsNotEmpty() password: string;
+}
+
+export class RequestOtpDto {
+  @ApiProperty({ description: 'Institutional email address for OTP delivery' })
+  @IsEmail()
+  email: string;
 }
 
 export class ForgotPasswordDto {

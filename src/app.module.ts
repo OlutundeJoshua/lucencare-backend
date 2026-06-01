@@ -49,7 +49,6 @@ import { HealthModule } from './health/health.module';
     TypeOrmModule.forRootAsync({
       useFactory: (configService: ConfigService) => ({
         ...configService.get('database'),
-        synchronize: false,
         autoLoadEntities: true,
       }),
       inject: [ConfigService],

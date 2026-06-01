@@ -1,3 +1,5 @@
+import cookieParser = require('cookie-parser');
+
 import { NestFactory } from '@nestjs/core';
 import { UnprocessableEntityException, ValidationPipe } from '@nestjs/common';
 import { Logger } from 'nestjs-pino';
@@ -12,7 +14,8 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
 
-  app.useLogger(app.get(Logger));
+  const logger = app.get(Logger);
+  app.useLogger(logger);
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('app.port', 3000);
@@ -20,14 +23,17 @@ async function bootstrap() {
 
   app.setGlobalPrefix(apiPrefix);
 
-  app.use(
-    helmet({
-      contentSecurityPolicy: { directives: { defaultSrc: ["'none'"] } },
-    }),
-  );
+  app.use(cookieParser());
+
+  const isProd = configService.get<string>('app.nodeEnv') === 'production';
+  if (isProd) {
+    app.use(helmet());
+  }
 
   app.enableCors({
-    origin: configService.get<string>('app.corsOrigin', 'http://localhost:3001'),
+    origin: isProd
+      ? configService.get<string>('app.corsOrigin')
+      : ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000'],
     credentials: true,
   });
 
@@ -57,12 +63,15 @@ async function bootstrap() {
       .setDescription('Consent-first health data platform')
       .setVersion('1.0')
       .addBearerAuth()
+      .addServer(`http://localhost:${port}`, 'Local dev')
       .build();
     const document = SwaggerModule.createDocument(app, swaggerConfig);
     SwaggerModule.setup('api/docs', app, document);
   }
 
   await app.listen(port);
+
+  logger.log(`Application is running on: http://localhost:${port}/${apiPrefix}`);
 }
 
 bootstrap();

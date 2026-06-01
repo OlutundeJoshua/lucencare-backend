@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/auth.md
-
 import { Entity, Column, Index } from 'typeorm';
 
 import { BaseEntity } from 'src/common/entities/base.entity';
@@ -10,7 +8,7 @@ import { UserRole } from 'src/common/enums';
 @Index(['orgId'])
 @Index(['role'])
 export class User extends BaseEntity {
-  @Column({ name: 'role', type: 'varchar', enum: UserRole })
+  @Column({ name: 'role', type: 'enum', enum: UserRole, enumName: 'user_role' })
   role: UserRole;
 
   @Column({ name: 'org_id', type: 'char', length: 26, nullable: true })

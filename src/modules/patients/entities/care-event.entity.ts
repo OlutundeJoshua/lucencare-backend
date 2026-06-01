@@ -18,7 +18,7 @@ export class CareEvent extends BaseEntity {
   @Column({ name: 'event_date', type: 'date' })
   eventDate: Date;
 
-  @Column({ name: 'provider_name', type: 'text', nullable: true, length: 200 })
+  @Column({ name: 'provider_name', type: 'varchar', length: 200, nullable: true })
   providerName?: string;
 
   @Column({ name: 'structured', type: 'jsonb' })

@@ -15,6 +15,7 @@ export enum OrgStatus {
   PENDING_VERIFICATION = 'pending_verification',
   ACTIVE = 'active',
   SUSPENDED = 'suspended',
+  REJECTED = 'rejected',
 }
 
 export enum ConsentPurpose {

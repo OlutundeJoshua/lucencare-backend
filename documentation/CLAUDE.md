@@ -505,6 +505,84 @@ const module = await Test.createTestingModule({
 }).compile();
 ```
 
+#### Controller Integration Test Pattern
+
+**Every `<name>.controller.spec.ts` MUST follow this pattern.** The broken "no providers" stub (just `controllers: [XController]` with no providers or guard overrides) is not acceptable — it cannot pass and provides zero value.
+
+The canonical reference is `src/modules/admin/admin.controller.spec.ts`. The pattern has three parts:
+
+**1. Guard helpers** — populate `req.user` so `@CurrentUser()` resolves correctly:
+
+```typescript
+// Populates req.user for the tested role — copy the shape used by JwtStrategy.validate()
+const allowAllGuard = {
+  canActivate: (context: ExecutionContext) => {
+    const req = context.switchToHttp().getRequest();
+    req.user = { sub: TEST_USER_ID, role: 'platform_admin', orgId: TEST_ORG_ID };
+    return true;
+  },
+};
+
+const denyGuard = {
+  canActivate: () => { throw new ForbiddenException(); },
+};
+```
+
+**2. `buildApp()` factory** — creates a fresh NestJS app with the real `ValidationPipe` and guard overrides:
+
+```typescript
+async function buildApp(roleGuardOverride = allowAllGuard): Promise<INestApplication> {
+  const moduleRef = await Test.createTestingModule({
+    controllers: [XController],
+    providers: [{ provide: XService, useValue: mockXService }],
+  })
+    .overrideGuard(JwtAuthGuard).useValue(allowAllGuard)   // always set req.user
+    .overrideGuard(RoleGuard).useValue(roleGuardOverride)   // vary per test
+    .compile();
+
+  const app = moduleRef.createNestApplication();
+  app.useGlobalPipes(new ValidationPipe({
+    whitelist: true,
+    transform: true,
+    forbidNonWhitelisted: true,
+    transformOptions: { enableImplicitConversion: true },
+    exceptionFactory: (errors) => new UnprocessableEntityException({
+      errors: errors.map((e) => ({
+        path: e.property,
+        message: Object.values(e.constraints ?? {}).join('; '),
+      })),
+    }),
+  }));
+  await app.init();
+  return app;
+}
+```
+
+**3. Test structure** — `beforeEach(() => jest.clearAllMocks())`, `afterEach(() => app?.close())`, one `describe` block per endpoint:
+
+```typescript
+describe('XController', () => {
+  let app: INestApplication;
+  beforeEach(() => { jest.clearAllMocks(); });
+  afterEach(async () => { await app?.close(); });
+
+  describe('PATCH /x/:id', () => {
+    it('returns 200 on success', async () => { /* happy path */ });
+    it('returns 403 when RoleGuard denies access', async () => { app = await buildApp(denyGuard); ... });
+    it('returns 404 when service throws NotFoundException', async () => { /* sad path */ });
+    it('returns 422 when body is invalid', async () => { /* validation */ });
+  });
+});
+```
+
+**Key rules:**
+- `JwtAuthGuard` is always overridden with an `allowAllGuard` that sets `req.user`. Never skip this.
+- `RoleGuard` defaults to the same `allowAllGuard` but must be overridden with `denyGuard` for 403 tests.
+- For controllers with multiple role levels (`PATIENT` vs `HMO_COORDINATOR`), create a `buildApp()` variant per role or parameterise the user object.
+- If the controller injects a service other than the primary one (e.g. `ConfigService`), add it to `providers` as a mock.
+- The `ValidationPipe` in `buildApp()` must match the global pipe in `main.ts` — including `exceptionFactory` — otherwise 422 tests will not work.
+- Use `supertest` for all HTTP assertions. Do not call controller methods directly.
+
 ---
 
 ## 8. What NOT To Do

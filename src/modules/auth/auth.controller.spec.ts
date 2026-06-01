@@ -2,6 +2,7 @@ import * as request from 'supertest';
 import cookieParser = require('cookie-parser');
 import { INestApplication, UnprocessableEntityException, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { ClsService } from 'nestjs-cls';
 
 import { UserRole } from 'src/common/enums';
@@ -48,6 +49,8 @@ describe('AuthController (integration)', () => {
         { provide: AuthService, useValue: mockAuthService },
         // ClsService is required by JwtAuthGuard (which is used on the logout endpoint)
         { provide: ClsService, useValue: { get: jest.fn(), set: jest.fn() } },
+        // ConfigService is required by AuthController.setRefreshCookie() to check nodeEnv
+        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('development') } },
       ],
     })
       // Override JwtAuthGuard so logout tests work without a real JWT; guards are tested separately

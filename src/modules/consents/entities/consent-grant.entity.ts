@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/consents.md
-
 import { Entity, Column, Index, VersionColumn } from 'typeorm';
 
 import { BaseEntity } from 'src/common/entities/base.entity';

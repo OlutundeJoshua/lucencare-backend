@@ -160,6 +160,12 @@ export class AuthService {
 
       const passwordHash = await bcrypt.hash(dto.password, saltRounds);
 
+      // TODO (V2): replace inline org creation with OrganizationsService.create(dto, manager).
+      // OrganizationsService.create(dto, manager) exists and is ready to be wired.
+      // Left inline here (same pattern as Patient) because the service stub was not yet
+      // implemented when AuthModule was written. When wiring: inject OrganizationsService
+      // into AuthService and replace the block below with:
+      //   const org = await this.orgsService.create({ name: dto.orgName, type: dto.orgType, contactEmail: dto.contactEmail }, manager);
       const org = orgRepo.create({
         name: dto.orgName,
         type: dto.orgType,

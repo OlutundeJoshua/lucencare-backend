@@ -13,6 +13,7 @@ build/
 .env.development
 .env.staging
 .env.production
+.env.example
 
 # TypeORM cache
 .tsbuildinfo

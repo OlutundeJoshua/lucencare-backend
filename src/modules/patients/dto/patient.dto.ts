@@ -1,7 +1,6 @@
-// TODO: Implement — see docs/modules/patients.md
-
 import {
   IsBoolean,
+  IsEmail,
   IsEnum,
   IsIn,
   IsISO8601,
@@ -16,6 +15,7 @@ import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 import { CareEventType, Gender, HmoLinkRequestStatus } from 'src/common/enums';
+import { PaginationDto } from 'src/common/dto/pagination.dto';
 
 export class MedicationItemDto {
   @ApiProperty() @IsString() @IsNotEmpty() name: string;
@@ -26,6 +26,8 @@ export class MedicationItemDto {
 
 export class CreatePatientDto {
   @ApiProperty() @IsString() @IsNotEmpty() name: string;
+
+  @ApiProperty() @IsEmail() email: string;
 
   @ApiProperty() @IsString() @IsNotEmpty() phone: string;
 
@@ -106,4 +108,11 @@ export class CreateCareEventDto {
   @ApiProperty({ description: 'Type-specific structured data' }) @IsObject() structured: Record<string, unknown>;
 
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(2000) notes?: string;
+}
+
+export class CareEventQueryDto extends PaginationDto {
+  @ApiPropertyOptional({ enum: CareEventType })
+  @IsOptional()
+  @IsEnum(CareEventType)
+  type?: CareEventType;
 }

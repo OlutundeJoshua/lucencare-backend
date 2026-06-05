@@ -1,6 +1,7 @@
 // TODO: Implement — see docs/modules/programs.md
 
 import {
+  Allow,
   ArrayMinSize,
   IsArray,
   IsDateString,
@@ -24,7 +25,7 @@ export class EligibilityCriterionDto {
   @IsIn(CRITERION_OPERATORS)
   operator: (typeof CRITERION_OPERATORS)[number];
 
-  @ApiProperty() value: unknown;
+  @ApiProperty() @Allow() value: unknown;
 }
 
 export class CreateProgramDto {

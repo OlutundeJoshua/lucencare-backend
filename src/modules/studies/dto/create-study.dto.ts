@@ -1,6 +1,7 @@
 // TODO: Implement — see docs/modules/studies.md
 
 import {
+  Allow,
   ArrayMinSize,
   IsArray,
   IsInt,
@@ -19,7 +20,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 export class StudyEligibilityCriterionDto {
   @ApiProperty() @IsString() @IsNotEmpty() field: string;
   @ApiProperty() @IsString() @IsNotEmpty() operator: string;
-  @ApiProperty() value: unknown;
+  @ApiProperty() @Allow() value: unknown;
 }
 
 export class CreateStudyDto {
@@ -41,5 +42,5 @@ export class CreateStudyDto {
 
   @ApiProperty() @IsInt() @IsPositive() targetCount: number;
 
-  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(2000) compensationDetails?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(500) compensationDetails?: string;
 }

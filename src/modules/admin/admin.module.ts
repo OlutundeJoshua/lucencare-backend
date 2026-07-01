@@ -6,6 +6,7 @@ import { ProgramsModule } from 'src/modules/programs/programs.module';
 import { StudiesModule } from 'src/modules/studies/studies.module';
 import { MatchingModule } from 'src/modules/matching/matching.module';
 import { AuditModule } from 'src/modules/audit/audit.module';
+import { ApplicationsModule } from 'src/modules/applications/applications.module';
 import { ADMIN_QUEUE } from 'src/queues/queues.constants';
 
 import { AdminController } from './admin.controller';
@@ -18,6 +19,7 @@ import { AdminService } from './admin.service';
     StudiesModule,
     MatchingModule,
     AuditModule,
+    ApplicationsModule,
     BullModule.registerQueue({ name: ADMIN_QUEUE }),
   ],
   controllers: [AdminController],

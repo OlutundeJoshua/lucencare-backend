@@ -19,8 +19,8 @@ export class Patient extends BaseEntity {
   @Column({ name: 'name', type: 'text' })
   name: string;
 
-  @Column({ name: 'phone', type: 'text', unique: true })
-  phone: string;
+  @Column({ name: 'phone', type: 'text', unique: true, nullable: true })
+  phone?: string;
 
   @Column({ name: 'membership_number', type: 'text', nullable: true, unique: true })
   membershipNumber?: string;
@@ -42,4 +42,13 @@ export class Patient extends BaseEntity {
 
   @Column({ name: 'direct_contact_shared', type: 'boolean', default: false })
   directContactShared: boolean;
+
+  @Column({ name: 'country', type: 'varchar', length: 10, nullable: true })
+  country?: string;
+
+  @Column({ name: 'primary_language', type: 'varchar', length: 10, nullable: true })
+  primaryLanguage?: string;
+
+  @Column({ name: 'is_caregiver', type: 'boolean', default: false })
+  isCaregiver: boolean;
 }

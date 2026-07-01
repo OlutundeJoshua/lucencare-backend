@@ -20,7 +20,7 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource, Repository } from 'typeorm';
 import { Redis } from 'ioredis';
 
-import { AuditAction, ConsentPurpose, ConsentStatus, OrgStatus, UserRole } from 'src/common/enums';
+import { AuditAction, ConsentPurpose, ConsentStatus, OrgStatus, OrgType, UserRole } from 'src/common/enums';
 import { SNAPSHOT_FIELDS } from 'src/common/constants/snapshot-fields';
 import { ADMIN_QUEUE, MAIL_QUEUE, ORG_VERIFICATION_JOB, SEND_OTP_JOB, SEND_RESET_PASSWORD_JOB } from 'src/queues/queues.constants';
 import { AuditService } from 'src/modules/audit/audit.service';
@@ -28,12 +28,16 @@ import { AuditService } from 'src/modules/audit/audit.service';
 import { User } from './entities/user.entity';
 import {
   ForgotPasswordDto,
+  HmoOnboardingDto,
   LoginDto,
+  NgoOnboardingDto,
+  PatientOnboardingDto,
   RegisterOrgDto,
   RegisterPatientDto,
   RegisterResearcherDto,
   RequestOtpDto,
   ResetPasswordDto,
+  SignupDto,
 } from './dto/auth.dto';
 
 // Assumption A-1: Patient and org registration use DataSource.transaction() with manager.getRepository()
@@ -53,7 +57,7 @@ const RESET_TOKEN_TTL_SECONDS = 3600; // 1 hour
 export interface AuthPayload {
   accessToken: string;
   refreshToken: string;
-  user: { id: string; email: string; role: UserRole; orgId?: string };
+  user: { id: string; name?: string; email: string; role: string; status: string; orgId?: string };
 }
 
 @Injectable()
@@ -347,17 +351,196 @@ export class AuthService {
     // V1 limitation: existing refresh tokens remain valid until their 7-day TTL expires after password reset
   }
 
-  private buildAuthPayload(user: User): AuthPayload {
+  async signupLite(dto: SignupDto): Promise<AuthPayload> {
+    const saltRounds = this.configService.get<number>('app.bcryptSaltRounds', 12);
+
+    const roleMap: Record<string, UserRole> = {
+      patient: UserRole.PATIENT,
+      ngo: UserRole.NGO_ADMIN,
+      hmo: UserRole.HMO_COORDINATOR,
+      professional: UserRole.PROFESSIONAL,
+      benefactor: UserRole.BENEFACTOR,
+    };
+    const userRole = roleMap[dto.role];
+
+    const { user } = await this.dataSource.transaction(async (manager) => {
+      const userRepo = manager.getRepository(User);
+
+      const existing = await userRepo.findOne({ where: { email: dto.email } });
+      if (existing) throw new ConflictException('Email address is already registered');
+
+      const passwordHash = await bcrypt.hash(dto.password, saltRounds);
+      const isPatient = userRole === UserRole.PATIENT;
+      const isOrg = userRole === UserRole.NGO_ADMIN || userRole === UserRole.HMO_COORDINATOR;
+
+      const user = userRepo.create({
+        role: userRole,
+        email: dto.email,
+        passwordHash,
+        status: isPatient ? 'active' : 'pending',
+      });
+      await userRepo.save(user);
+
+      if (isPatient) {
+        const patientRepo = manager.getRepository(Patient);
+        const patient = patientRepo.create({
+          userId: user.id,
+          name: dto.name,
+          conditionTags: [],
+          isCaregiver: false,
+          directContactShared: false,
+        });
+        await patientRepo.save(patient);
+      }
+
+      if (isOrg) {
+        const orgRepo = manager.getRepository(Organization);
+        const org = orgRepo.create({
+          name: dto.name,
+          type: userRole === UserRole.NGO_ADMIN ? OrgType.NGO : OrgType.HMO,
+          contactEmail: dto.email,
+          status: OrgStatus.PENDING_VERIFICATION,
+        });
+        await orgRepo.save(org);
+
+        await userRepo.update({ id: user.id }, { orgId: org.id });
+        user.orgId = org.id;
+      }
+
+      return { user };
+    });
+
+    return this.buildAuthPayload(user, dto.name);
+  }
+
+  async completePatientOnboarding(userId: string, dto: PatientOnboardingDto): Promise<object> {
+    const patientRepo = this.dataSource.getRepository(Patient);
+    const consentGrantRepo = this.dataSource.getRepository(ConsentGrant);
+
+    const patient = await patientRepo.findOne({ where: { userId } });
+    if (!patient) throw new ConflictException('Patient profile not found for this user');
+
+    const conditionTags = dto.conditions
+      ? dto.conditions.split(',').map((c) => c.trim()).filter(Boolean)
+      : [];
+
+    const genderMap: Record<string, string> = {
+      male: 'male',
+      female: 'female',
+      other: 'other',
+    };
+
+    await this.dataSource.transaction(async (manager) => {
+      const pRepo = manager.getRepository(Patient);
+      const cgRepo = manager.getRepository(ConsentGrant);
+
+      await pRepo.update({ userId }, {
+        isCaregiver: dto.accountType === 'caregiver',
+        dateOfBirth: dto.dateOfBirth,
+        gender: dto.biologicalSex ? (genderMap[dto.biologicalSex] as any) : undefined,
+        country: dto.country,
+        primaryLanguage: dto.primaryLanguage,
+        conditionTags,
+      });
+
+      const consentMapping = [
+        { granted: dto.ngoConsent, purpose: ConsentPurpose.NGO_FUNDING },
+        { granted: dto.researchConsent, purpose: ConsentPurpose.CLINICAL_RESEARCH_RECRUITMENT },
+      ];
+
+      for (const { granted, purpose } of consentMapping) {
+        const existing = await cgRepo.findOne({ where: { patientId: patient.id, purpose } });
+        const status = granted ? ConsentStatus.ACTIVE : ConsentStatus.NOT_GRANTED;
+
+        if (existing) {
+          await cgRepo.update({ id: existing.id }, { status, grantedAt: granted ? new Date() : existing.grantedAt });
+        } else {
+          const grant = cgRepo.create({
+            patientId: patient.id,
+            purpose,
+            dataScopes: SNAPSHOT_FIELDS[purpose],
+            status,
+            grantedAt: new Date(),
+          });
+          await cgRepo.save(grant);
+        }
+      }
+    });
+
+    return patientRepo.findOne({ where: { userId } }) as Promise<object>;
+  }
+
+  async completeNgoOnboarding(orgId: string, dto: NgoOnboardingDto): Promise<object> {
+    const orgRepo = this.dataSource.getRepository(Organization);
+    const org = await orgRepo.findOne({ where: { id: orgId } });
+    if (!org) throw new ConflictException('Organisation not found');
+
+    await orgRepo.update({ id: orgId }, {
+      name: dto.orgName,
+      registrationNumber: dto.registrationNumber,
+      focusAreas: dto.focusAreas,
+      website: dto.website,
+      operatingRegions: dto.operatingRegions,
+      headOfficeCountry: dto.headOfficeCountry,
+      programDescription: dto.programDescription,
+    });
+
+    await this.adminQueue.add(ORG_VERIFICATION_JOB, {
+      orgId,
+      orgName: dto.orgName,
+      contactEmail: org.contactEmail,
+    });
+
+    return orgRepo.findOne({ where: { id: orgId } }) as Promise<object>;
+  }
+
+  async completeHmoOnboarding(orgId: string, dto: HmoOnboardingDto): Promise<object> {
+    const orgRepo = this.dataSource.getRepository(Organization);
+    const org = await orgRepo.findOne({ where: { id: orgId } });
+    if (!org) throw new ConflictException('Organisation not found');
+
+    await orgRepo.update({ id: orgId }, {
+      name: dto.orgName,
+      licenceNumber: dto.licenceNumber,
+      contactPhone: dto.contactPhone,
+      coverageRegion: dto.coverageRegion,
+      enrolledPatientCount: dto.enrolledPatientCount,
+      specialtyFocus: dto.specialtyFocus,
+    });
+
+    await this.adminQueue.add(ORG_VERIFICATION_JOB, {
+      orgId,
+      orgName: dto.orgName,
+      contactEmail: org.contactEmail,
+    });
+
+    return orgRepo.findOne({ where: { id: orgId } }) as Promise<object>;
+  }
+
+  private buildAuthPayload(user: User, name?: string): AuthPayload {
     return {
       accessToken: this.issueAccessToken(user),
       refreshToken: this.issueRefreshToken(user),
       user: {
         id: user.id,
+        name,
         email: user.email,
-        role: user.role,
+        role: this.toClientRole(user.role),
+        status: user.status,
         orgId: user.orgId,
       },
     };
+  }
+
+  // Maps internal UserRole enum values to the short-form strings the frontend Role type expects.
+  // The JWT still carries the full internal role (ngo_admin, hmo_coordinator) for guards.
+  private toClientRole(role: UserRole): string {
+    const map: Partial<Record<UserRole, string>> = {
+      [UserRole.NGO_ADMIN]: 'ngo',
+      [UserRole.HMO_COORDINATOR]: 'hmo',
+      [UserRole.PLATFORM_ADMIN]: 'admin',
+    };
+    return map[role] ?? role;
   }
 
   private issueAccessToken(user: User): string {

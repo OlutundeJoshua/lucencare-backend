@@ -26,7 +26,7 @@ export interface PaginatedPatientIds {
   nextCursor?: string;
 }
 
-interface PaginatedResult<T> {
+export interface PaginatedResult<T> {
   data: T[];
   nextCursor?: string;
 }

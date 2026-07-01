@@ -27,6 +27,7 @@ import { MessagesModule } from './modules/messages/messages.module';
 import { ExportModule } from './modules/export/export.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { ApplicationsModule } from './modules/applications/applications.module';
 import { QueuesModule } from './queues/queues.module';
 import { HealthModule } from './health/health.module';
 
@@ -90,6 +91,7 @@ import { HealthModule } from './health/health.module';
     ExportModule,
     AuditModule,
     AdminModule,
+    ApplicationsModule,
     QueuesModule,
     HealthModule,
   ],

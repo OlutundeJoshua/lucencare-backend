@@ -20,17 +20,27 @@ import {
 import { ConfigService } from '@nestjs/config';
 
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
+import { RoleGuard } from 'src/common/guards/role.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { CurrentUser, JwtPayload } from 'src/common/decorators/current-user.decorator';
+import { UserRole } from 'src/common/enums';
 
 import { AuthService } from './auth.service';
 import {
   ForgotPasswordDto,
+  HmoOnboardingDto,
   LoginDto,
+  NgoOnboardingDto,
+  PatientOnboardingDto,
   RegisterOrgDto,
   RegisterPatientDto,
   RegisterResearcherDto,
   RequestOtpDto,
   ResetPasswordDto,
+  SignupDto,
 } from './dto/auth.dto';
+import { BenefactorOnboardingDto, ProfessionalOnboardingDto } from 'src/modules/applications/dto/applications.dto';
+import { ApplicationsService } from 'src/modules/applications/applications.service';
 
 const REFRESH_COOKIE = 'refresh_token';
 const REFRESH_COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -40,6 +50,7 @@ const REFRESH_COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
+    private readonly applicationsService: ApplicationsService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -158,6 +169,96 @@ export class AuthController {
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto);
     return { message: 'Password updated successfully.' };
+  }
+
+  @Post('signup')
+  @ApiOperation({ summary: 'Create account with minimal details (name, email, password, role)' })
+  @ApiResponse({ status: 201, description: 'Account created; access token in body, refresh token in httpOnly cookie' })
+  @ApiResponse({ status: 409, description: 'Email already registered' })
+  async signup(
+    @Body() dto: SignupDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const payload = await this.authService.signupLite(dto);
+    this.setRefreshCookie(res, payload.refreshToken);
+    return { accessToken: payload.accessToken, user: payload.user };
+  }
+
+  @Post('onboarding/patient')
+  @UseGuards(JwtAuthGuard, RoleGuard)
+  @Roles(UserRole.PATIENT)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Complete patient health profile and consent selections' })
+  @ApiResponse({ status: 201, description: 'Patient profile updated with onboarding data' })
+  @ApiResponse({ status: 401, description: 'Unauthenticated' })
+  @ApiResponse({ status: 403, description: 'Requires patient role' })
+  async onboardPatient(
+    @Body() dto: PatientOnboardingDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.authService.completePatientOnboarding(user.sub, dto);
+  }
+
+  @Post('onboarding/ngo')
+  @UseGuards(JwtAuthGuard, RoleGuard)
+  @Roles(UserRole.NGO_ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Submit NGO organisation details for admin verification' })
+  @ApiResponse({ status: 201, description: 'Organisation profile updated; verification job queued' })
+  @ApiResponse({ status: 401, description: 'Unauthenticated' })
+  @ApiResponse({ status: 403, description: 'Requires ngo_admin role' })
+  async onboardNgo(
+    @Body() dto: NgoOnboardingDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.authService.completeNgoOnboarding(user.orgId as string, dto);
+  }
+
+  @Post('onboarding/hmo')
+  @UseGuards(JwtAuthGuard, RoleGuard)
+  @Roles(UserRole.HMO_COORDINATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Submit HMO organisation details for admin verification' })
+  @ApiResponse({ status: 201, description: 'Organisation profile updated; verification job queued' })
+  @ApiResponse({ status: 401, description: 'Unauthenticated' })
+  @ApiResponse({ status: 403, description: 'Requires hmo_coordinator role' })
+  async onboardHmo(
+    @Body() dto: HmoOnboardingDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.authService.completeHmoOnboarding(user.orgId as string, dto);
+  }
+
+  @Post('onboarding/professional')
+  @UseGuards(JwtAuthGuard, RoleGuard)
+  @Roles(UserRole.PROFESSIONAL)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Submit professional application for admin verification' })
+  @ApiResponse({ status: 201, description: 'Application submitted; pending admin review' })
+  @ApiResponse({ status: 401, description: 'Unauthenticated' })
+  @ApiResponse({ status: 403, description: 'Requires professional role' })
+  @ApiResponse({ status: 409, description: 'Application already submitted' })
+  async onboardProfessional(
+    @Body() dto: ProfessionalOnboardingDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.applicationsService.createProfessional(user.sub, dto);
+  }
+
+  @Post('onboarding/benefactor')
+  @UseGuards(JwtAuthGuard, RoleGuard)
+  @Roles(UserRole.BENEFACTOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Submit benefactor application for admin verification' })
+  @ApiResponse({ status: 201, description: 'Application submitted; pending admin review' })
+  @ApiResponse({ status: 401, description: 'Unauthenticated' })
+  @ApiResponse({ status: 403, description: 'Requires benefactor role' })
+  @ApiResponse({ status: 409, description: 'Application already submitted' })
+  async onboardBenefactor(
+    @Body() dto: BenefactorOnboardingDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.applicationsService.createBenefactor(user.sub, dto);
   }
 
   private setRefreshCookie(res: Response, token: string): void {

@@ -182,6 +182,12 @@ export class ProgramsService {
     await this.notificationsQueue.add(FAN_OUT_NOTIFY_JOB, { programId, orgId });
   }
 
+  async findOne(id: string): Promise<Program> {
+    const program = await this.programRepo.findOne({ where: { id } });
+    if (!program) throw new NotFoundException(`Program ${id} not found`);
+    return program;
+  }
+
   async updateStatus(programId: string, status: ProgramStatus): Promise<Program> {
     const program = await this.programRepo.findOne({ where: { id: programId } });
     if (!program) {

@@ -209,6 +209,12 @@ export class StudiesService {
     return this.studyEnrollmentRepo.save(enrollment);
   }
 
+  async findOne(id: string): Promise<Study> {
+    const study = await this.studyRepo.findOne({ where: { id } });
+    if (!study) throw new NotFoundException(`Study ${id} not found`);
+    return study;
+  }
+
   async updateStatus(studyId: string, status: StudyStatus): Promise<Study> {
     const study = await this.studyRepo.findOne({ where: { id: studyId } });
     if (!study) {

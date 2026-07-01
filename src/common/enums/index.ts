@@ -4,6 +4,21 @@ export enum UserRole {
   HMO_COORDINATOR = 'hmo_coordinator',
   RESEARCHER = 'researcher',
   PLATFORM_ADMIN = 'platform_admin',
+  PROFESSIONAL = 'professional',
+  BENEFACTOR = 'benefactor',
+}
+
+export enum ApplicationStatus {
+  PENDING = 'pending',
+  APPROVED = 'approved',
+  REJECTED = 'rejected',
+}
+
+export enum ProfessionType {
+  DOCTOR = 'Doctor',
+  NURSE = 'Nurse',
+  THERAPIST = 'Therapist',
+  OTHER = 'Other',
 }
 
 export enum OrgType {

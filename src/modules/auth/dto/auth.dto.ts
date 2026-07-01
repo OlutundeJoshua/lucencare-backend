@@ -1,6 +1,7 @@
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsIn,
@@ -8,6 +9,8 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUrl,
+  Equals,
   Length,
   MinLength,
 } from 'class-validator';
@@ -100,3 +103,92 @@ export class ResetPasswordDto {
 
   @ApiProperty({ minLength: 8 }) @IsString() @MinLength(8) password: string;
 }
+
+export class SignupDto {
+  @ApiProperty({ minLength: 2 }) @IsString() @MinLength(2) name: string;
+
+  @ApiProperty() @IsEmail() email: string;
+
+  @ApiProperty({ minLength: 8 }) @IsString() @MinLength(8) password: string;
+
+  @ApiProperty({ enum: ['patient', 'ngo', 'hmo', 'professional', 'benefactor'] })
+  @IsIn(['patient', 'ngo', 'hmo', 'professional', 'benefactor'])
+  role: string;
+}
+
+export class PatientOnboardingDto {
+  @ApiProperty({ enum: ['patient', 'caregiver'] })
+  @IsIn(['patient', 'caregiver'])
+  accountType: 'patient' | 'caregiver';
+
+  @ApiPropertyOptional() @IsOptional() @IsISO8601({ strict: true }) dateOfBirth?: string;
+
+  @ApiPropertyOptional({ enum: ['male', 'female', 'other'] })
+  @IsOptional()
+  @IsIn(['male', 'female', 'other'])
+  biologicalSex?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() country?: string;
+
+  @ApiPropertyOptional({ description: 'Comma-separated conditions e.g. "Diabetes, Hypertension"' })
+  @IsOptional()
+  @IsString()
+  conditions?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() primaryLanguage?: string;
+
+  @ApiProperty({ description: 'Must be true to proceed' })
+  @Equals(true, { message: 'You must accept the terms and privacy policy' })
+  termsConsent: true;
+
+  @ApiProperty() @IsBoolean() ngoConsent: boolean;
+
+  @ApiProperty() @IsBoolean() researchConsent: boolean;
+}
+
+export class NgoOnboardingDto {
+  @ApiProperty() @IsString() @IsNotEmpty() orgName: string;
+
+  @ApiProperty() @IsString() @IsNotEmpty() registrationNumber: string;
+
+  @ApiProperty() @IsString() @IsNotEmpty() focusAreas: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsUrl() website?: string;
+
+  @ApiProperty() @IsString() @IsNotEmpty() operatingRegions: string;
+
+  @ApiProperty() @IsString() @IsNotEmpty() headOfficeCountry: string;
+
+  @ApiProperty() @IsString() @IsNotEmpty() programDescription: string;
+
+  @ApiProperty({ description: 'Must be true to proceed' })
+  @Equals(true, { message: 'You must accept the terms of service' })
+  termsConsent: true;
+
+  @ApiProperty({ description: 'Must be true to proceed' })
+  @Equals(true, { message: 'You must accept the data processing agreement' })
+  dataProcessingConsent: true;
+}
+
+export class HmoOnboardingDto {
+  @ApiProperty() @IsString() @IsNotEmpty() orgName: string;
+
+  @ApiProperty() @IsString() @IsNotEmpty() licenceNumber: string;
+
+  @ApiProperty() @IsString() @IsNotEmpty() contactPhone: string;
+
+  @ApiProperty() @IsString() @IsNotEmpty() coverageRegion: string;
+
+  @ApiProperty() @IsString() @IsNotEmpty() enrolledPatientCount: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() specialtyFocus?: string;
+
+  @ApiProperty({ description: 'Must be true to proceed' })
+  @Equals(true, { message: 'You must acknowledge the BAA' })
+  baaAcknowledgement: true;
+
+  @ApiProperty({ description: 'Must be true to proceed' })
+  @Equals(true, { message: 'You must accept the terms of service' })
+  termsConsent: true;
+}
+

@@ -11,6 +11,7 @@ import { AuditModule } from 'src/modules/audit/audit.module';
 import { PatientsModule } from 'src/modules/patients/patients.module';
 import { OrganizationsModule } from 'src/modules/organizations/organizations.module';
 import { ConsentsModule } from 'src/modules/consents/consents.module';
+import { ApplicationsModule } from 'src/modules/applications/applications.module';
 
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -45,6 +46,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     ConsentsModule,
 
     AuditModule,
+    ApplicationsModule,
   ],
   controllers: [AuthController],
   providers: [

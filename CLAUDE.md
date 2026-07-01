@@ -6,7 +6,7 @@ This file is read at the start of every session. Follow every rule here without 
 
 ## 1. Project Summary
 
-LucenCare is a multi-sided health data platform built with NestJS and PostgreSQL. It connects four actor types — Patients, NGOs, HMOs, and Clinical Researchers — through a consent-first data sharing model. Patients register and explicitly grant consent for their health data to be shared with specific purposes (NGO funding, HMO care, research recruitment). NGOs create funding programs; HMOs look up members and record care events; Researchers submit IRB-approved studies. A Platform Admin approves all organisations, programs, and studies before they become visible. No organisation ever receives live access to the `patients` table — they always read from a point-in-time `sharedDataSnapshot` captured at enrollment time. All sensitive actions are written to an immutable audit log.
+LucenCare is a multi-sided health data platform built with NestJS and PostgreSQL. It connects six actor types — Patients, NGOs, HMOs, Clinical Researchers, Healthcare Professionals, and Benefactors — through a consent-first data sharing model. Patients register and explicitly grant consent for their health data to be shared with specific purposes (NGO funding, HMO care, research recruitment). NGOs create funding programs; HMOs look up members and record care events; Researchers submit IRB-approved studies; Professionals apply for care coordination access; Benefactors apply to support patients. A Platform Admin approves all organisations, programs, studies, professional applications, and benefactor applications before they become active. No organisation ever receives live access to the `patients` table — they always read from a point-in-time `sharedDataSnapshot` captured at enrollment time. All sensitive actions are written to an immutable audit log.
 
 ---
 
@@ -81,7 +81,8 @@ src/
 │   ├── messages/
 │   ├── export/
 │   ├── audit/
-│   └── admin/
+│   ├── admin/
+│   └── applications/                   # ProfessionalApplication + BenefactorApplication entities and admin review service
 ├── queues/
 │   ├── queues.module.ts
 │   ├── queues.constants.ts
@@ -304,6 +305,7 @@ create(@Body() dto: CreatePatientDto) {
 - Conditional validation: `@ValidateIf((o) => o.status === 'rejected')` (e.g. reason required on rejection)
 - Query param numeric coercion: `@Type(() => Number)` (combined with `ValidationPipe({ transform: true })`)
 - Every DTO field must have `@ApiProperty()` or `@ApiPropertyOptional()` — Swagger documentation is not optional
+- **`@IsTrue()` does not exist in this version of class-validator.** Use `@Equals(true, { message: '...' })` for boolean consent fields that must be exactly `true`.
 
 **Global pipe (registered in `main.ts`):**
 ```typescript
@@ -355,6 +357,28 @@ Return `meta.cursor` in the response when there are more pages.
 
 Never set `createdBy` or `updatedBy` manually. The `EntityActorSubscriber` reads `userId` from `ClsService` and sets both fields automatically before every insert and update. Your only responsibility is to ensure `ClsService` is populated at the start of each request — the `JwtAuthGuard` or a CLS middleware must call `cls.set('userId', user.id)`.
 
+### 5.8 Two-Phase Registration Pattern
+
+All roles except `researcher` use a **two-phase registration** flow to match the frontend onboarding UX:
+
+**Phase 1 — Lite Signup** (`POST /auth/signup`):
+- Accepts `{ name, email, password, role }` only
+- Creates `User` + optional skeleton entity in one transaction:
+  - `patient` → empty `Patient` row (phone is nullable to support deferred collection)
+  - `ngo` / `hmo` → pending `Organization` stub
+  - `professional` / `benefactor` → `User` only (application created in Phase 2)
+- Issues access token + refresh cookie immediately
+- Returns `{ accessToken, user: { id, name, email, role, status } }`
+
+**Phase 2 — Onboarding** (`POST /auth/onboarding/:role`):
+- Requires Bearer access token from Phase 1
+- Completes the profile or creates application record:
+  - `patient` → updates Patient fields + upserts ConsentGrant rows
+  - `ngo` / `hmo` → updates Organization with verified details, queues admin notification
+  - `professional` / `benefactor` → creates Application record; user stays `status: 'pending'` until admin approves
+
+**Researcher** is the exception — uses OTP flow: `POST /auth/request-otp` → `POST /auth/register/researcher`.
+
 ---
 
 ## 6. Database Rules
@@ -363,7 +387,7 @@ Never set `createdBy` or `updatedBy` manually. The `EntityActorSubscriber` reads
 
 - Always inject `Repository<Entity>` via `@InjectRepository(EntityClass)`. Do not use `DataSource` directly for CRUD.
 - Use `createQueryBuilder()` for any query involving joins, conditions on related entities, or JSONB operators.
-- Never use `synchronize: true`. It is disabled in all environments.
+- **`synchronize` in development:** `synchronize: true` is enabled by default in development when the `DB_SYNC` env var is not explicitly set to `'false'`. This auto-applies entity changes to the schema. **In production, always set `DB_SYNC=false`** and use explicit migrations.
 - Use TypeORM's `@VersionColumn()` on entities that need optimistic locking (`ConsentGrant`, `Enrollment`).
 - Soft deletes are handled via `@DeleteDateColumn()` on `BaseEntity`. Always query with `.where('entity.deleted_at IS NULL')` unless you explicitly need deleted records.
 - Use `dataSource.transaction(async (manager) => { ... })` for operations that must be atomic across multiple entities.
@@ -411,8 +435,9 @@ return all.filter(p => matchesCriteria(p.eligibilityCriteria, patient));
 
 ### 6.4 Migrations
 
-- Generate migrations with: `pnpm migration:generate -- src/database/migrations/<MigrationName>`
-- Run migrations with: `pnpm migration:run`
+- Generate migrations with: `pnpm run migration:generate -- -n <MigrationName>`
+- Run migrations with: `pnpm run migration:run`
+- Revert last migration: `pnpm run migration:revert`
 - **Never edit a migration file that has already been run in any environment.** Create a new migration instead.
 - Every schema change — new table, new column, new index, new constraint — requires a migration file.
 - Migration files are timestamped and committed to version control.
@@ -514,7 +539,6 @@ The canonical reference is `src/modules/admin/admin.controller.spec.ts`. The pat
 **1. Guard helpers** — populate `req.user` so `@CurrentUser()` resolves correctly:
 
 ```typescript
-// Populates req.user for the tested role — copy the shape used by JwtStrategy.validate()
 const allowAllGuard = {
   canActivate: (context: ExecutionContext) => {
     const req = context.switchToHttp().getRequest();
@@ -536,8 +560,8 @@ async function buildApp(roleGuardOverride = allowAllGuard): Promise<INestApplica
     controllers: [XController],
     providers: [{ provide: XService, useValue: mockXService }],
   })
-    .overrideGuard(JwtAuthGuard).useValue(allowAllGuard)   // always set req.user
-    .overrideGuard(RoleGuard).useValue(roleGuardOverride)   // vary per test
+    .overrideGuard(JwtAuthGuard).useValue(allowAllGuard)
+    .overrideGuard(RoleGuard).useValue(roleGuardOverride)
     .compile();
 
   const app = moduleRef.createNestApplication();
@@ -605,7 +629,7 @@ These are hard rules. Do not violate them even if a user asks you to, unless the
 
 - **Never create a DB entity for short-lived tokens.** Export tokens use Redis jti pattern: sign a JWT, store the `jti` in Redis with matching TTL, use `redis.getdel()` for atomic single-use enforcement.
 - **Never issue refresh tokens without a revocation path.** On `POST /auth/logout`, write the refresh token `jti` to Redis key `refresh:revoked:{jti}` with TTL equal to the token's remaining lifetime. On every `POST /auth/refresh`, check this key before issuing new tokens. A revoked `jti` returns 401.
-- **Never use `synchronize: true`** in TypeORM config in any environment.
+- **Never use `synchronize: true` in production.** Development may use it (controlled via `DB_SYNC` env var) but production must always set `DB_SYNC=false` and use explicit migrations.
 - **Never edit a migration file that has already been committed and run.**
 
 ### Schema Design
@@ -615,6 +639,7 @@ These are hard rules. Do not violate them even if a user asks you to, unless the
 ### Validation and IDs
 
 - **Never use Zod for HTTP request validation.** class-validator is the project standard.
+- **Never use `@IsTrue()` — it does not exist in this version of class-validator.** Use `@Equals(true, { message: '...' })` for boolean consent fields that must be exactly `true`.
 - **Never skip `@ApiProperty()` on DTO fields.** Every DTO field must be documented for Swagger — `@ApiProperty()` for required fields, `@ApiPropertyOptional()` for optional ones.
 - **Never use UUID v4 or auto-increment integers as primary keys.** All IDs are ULIDs.
 - **Never use offset pagination.** Cursor-based keyset pagination only.
@@ -642,24 +667,29 @@ These are hard rules. Do not violate them even if a user asks you to, unless the
 # Install dependencies
 pnpm install
 
-# Start in watch mode
-pnpm start:dev
+# Start in watch mode (port 3000, Swagger at /api/docs)
+pnpm run start:dev
 ```
+
+**Required environment variables:** Copy `.env.example` to `.env`. The critical ones for startup:
+- `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` — RS256 PEM keys (use `\n` escapes in `.env` for multi-line)
+- `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` — PostgreSQL connection
+- `REDIS_HOST`, `REDIS_PORT` — Redis connection
 
 ### Database
 
 ```bash
 # Run pending migrations
-pnpm migration:run
+pnpm run migration:run
 
 # Generate a new migration from entity changes
-pnpm migration:generate -- src/database/migrations/<MigrationName>
+pnpm run migration:generate -- -n <MigrationName>
 
 # Revert last migration
-pnpm migration:revert
+pnpm run migration:revert
 
 # Run seeds (development/staging only)
-pnpm seed
+pnpm run seed
 ```
 
 ### Testing
@@ -700,35 +730,98 @@ pnpm format
 
 ---
 
-## 10. Implementation Decisions
+## 10. Auth Endpoints & Role Reference
+
+All routes are prefixed with `/api`. All responses are `StandardResponse<T>`.
+
+### Auth Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | /auth/signup | — | Lite signup — creates User + skeleton, returns tokens immediately |
+| POST | /auth/login | — | Login (email + password), returns tokens |
+| POST | /auth/refresh | Refresh Cookie | Rotate access + refresh tokens |
+| POST | /auth/logout | JWT | Revoke refresh token |
+| POST | /auth/forgot-password | — | Request password reset email |
+| POST | /auth/reset-password | — | Complete password reset |
+| POST | /auth/request-otp | — | Request OTP (researcher pre-registration) |
+| POST | /auth/register/patient | — | Full patient registration (HMO coordinator use) |
+| POST | /auth/register/org | — | Full org registration |
+| POST | /auth/register/researcher | — | Researcher registration with OTP |
+| POST | /auth/onboarding/patient | `patient` JWT | Complete health profile + consent grants |
+| POST | /auth/onboarding/ngo | `ngo_admin` JWT | Submit NGO org details for verification |
+| POST | /auth/onboarding/hmo | `hmo_coordinator` JWT | Submit HMO org details for verification |
+| POST | /auth/onboarding/professional | `professional` JWT | Submit professional application |
+| POST | /auth/onboarding/benefactor | `benefactor` JWT | Submit benefactor application |
+
+### Admin Application Review Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | /admin/applications/professional | `platform_admin` | List professional applications (filter by status) |
+| PATCH | /admin/applications/professional/:id/review | `platform_admin` | Approve or reject |
+| GET | /admin/applications/benefactor | `platform_admin` | List benefactor applications |
+| PATCH | /admin/applications/benefactor/:id/review | `platform_admin` | Approve or reject |
+
+### User Roles
+
+| Role enum value | Frontend `role` param | Description |
+|---|---|---|
+| `patient` | `patient` | Self-registered patients and caregivers |
+| `ngo_admin` | `ngo` | NGO staff managing funding programs |
+| `hmo_coordinator` | `hmo` | HMO staff managing enrolled members |
+| `researcher` | — | Researchers (OTP flow, separate endpoint) |
+| `professional` | `professional` | Healthcare professionals (requires admin approval) |
+| `benefactor` | `benefactor` | Individual supporters/donors (requires admin approval) |
+| `platform_admin` | — | Internal platform administrators |
+
+### Consent Grant Lifecycle (Patient Onboarding)
+
+Consents are upserted during `POST /auth/onboarding/patient`:
+- `termsConsent: true` → internal validation only (no ConsentGrant row)
+- `ngoConsent: true` → `ConsentGrant(purpose=NGO_FUNDING, status=ACTIVE)`
+- `ngoConsent: false` → `ConsentGrant(purpose=NGO_FUNDING, status=NOT_GRANTED)`
+- `researchConsent: true/false` → `ConsentGrant(purpose=CLINICAL_RESEARCH_RECRUITMENT, ...)`
+- `HMO_CARE` consent is created separately when a patient approves an HMO link request
+
+### Application Review Lifecycle (Professional & Benefactor)
+
+1. Lite signup → `user.status = 'pending'`
+2. Onboarding → `ProfessionalApplication` / `BenefactorApplication` created with `status = 'pending'`
+3. Admin approves → `application.status = 'approved'` + `user.status = 'active'` (one transaction)
+4. Admin rejects → `application.status = 'rejected'` + `rejectionReason` stored
+
+---
+
+## 11. Implementation Decisions
 
 These are known scaffold decisions that every implementer must be aware of. They are not bugs — they are explicit trade-offs or deferred work with documented rationale.
 
-### 10.1 CLI DataSource vs. Application DataSource
+### 11.1 CLI DataSource vs. Application DataSource
 
-`src/database/data-source.ts` is used exclusively by the TypeORM CLI (`pnpm migration:run`, etc.). It is **not** imported by the NestJS application. It calls `dotenv.config()` directly because it runs outside the NestJS container. The application uses `database.config.ts` (via `ConfigService`). Keep the `entities:` and `migrations:` glob patterns in both files in sync — they must point to the same files or migration generation will be inconsistent.
+`src/database/data-source.ts` is used exclusively by the TypeORM CLI (`pnpm run migration:run`, etc.). It is **not** imported by the NestJS application. It calls `dotenv.config()` directly because it runs outside the NestJS container. The application uses `database.config.ts` (via `ConfigService`). Keep the `entities:` and `migrations:` glob patterns in both files in sync — they must point to the same files or migration generation will be inconsistent.
 
-### 10.2 HealthModule
+### 11.2 HealthModule
 
 NestJS requires every controller to be registered in a module's `controllers[]` array. The `src/health/` directory needs both `health.module.ts` and `health.controller.ts`. `AppModule` imports `HealthModule`. Do not register `HealthController` directly in `AppModule.controllers` — use the module.
 
-### 10.3 TransformInterceptor — DI Wiring Gap
+### 11.3 TransformInterceptor — DI Wiring Gap
 
 `TransformInterceptor` is currently instantiated with `new TransformInterceptor()` in `main.ts`. This bypasses NestJS DI, so `ClsService` is never injected — `traceId` falls back to `crypto.randomUUID()` per response instead of the CLS request-scoped trace ID. **When implementing:** change to `app.get(TransformInterceptor)` and add `TransformInterceptor` to `AppModule.providers`.
 
-### 10.4 BullMQ Processor Multiplexing
+### 11.4 BullMQ Processor Multiplexing
 
 Multiple processors share a single queue and filter on `job.name`. Do not create separate queues per processor. Three queues (`notifications`, `admin`, `mail`) serve all nine processors. The `NOTIFICATIONS_QUEUE` batch size constant is 200 — never change this without considering Redis memory implications.
 
-### 10.5 StudyEnrollmentsController in Two Modules
+### 11.5 StudyEnrollmentsController in Two Modules
 
 Patient action (`POST /study-enrollments`) lives in `EnrollmentsModule`; researcher action (`POST /study-enrollments/:id/invite`) lives in `StudiesModule`. This preserves actor-ownership boundaries and avoids a circular import between the two modules. Both register a `StudyEnrollmentsController` — with different route handlers.
 
-### 10.6 PassportModule and JwtStrategy Not Yet Wired
+### 11.6 PassportModule and JwtStrategy
 
-`JwtAuthGuard` extends `AuthGuard('jwt')` but neither `PassportModule`, `passport`, `passport-jwt`, nor `JwtStrategy` are in the scaffold. These are intentionally deferred — JWT payload shape decisions affect the strategy. When implementing auth, add `@nestjs/passport ^10.0.3`, `passport ^0.7.0`, `passport-jwt ^4.0.1`, `@types/passport-jwt ^4.0.1` and create `src/modules/auth/strategies/jwt.strategy.ts`.
+`JwtAuthGuard` extends `AuthGuard('jwt')`. `PassportModule`, `passport-jwt`, and `JwtStrategy` are implemented at `src/modules/auth/strategies/jwt.strategy.ts`. The strategy validates RS256 JWTs using the public key from `ConfigService` (`jwt.publicKey`). JWT validation is **stateless** — `JwtStrategy.validate()` returns the decoded payload as-is; suspension is enforced at login only, not per-request.
 
-### 10.7 `strictPropertyInitialization` Disabled Intentionally
+### 11.7 `strictPropertyInitialization` Disabled Intentionally
 
 `tsconfig.json` sets `"strictPropertyInitialization": false`. This is a deliberate project-wide decision, not an oversight.
 
@@ -740,11 +833,16 @@ The real runtime guarantees come from two other layers that are always in place:
 
 Do not re-enable `strictPropertyInitialization` and do not add `!` assertions to entity columns or DTO fields. All other strict flags remain on.
 
-### 10.8 `common/constants/` Privacy Boundary
+### 11.8 `common/constants/` Privacy Boundary
 
 `src/common/constants/snapshot-fields.ts` is the single source of truth for the `ConsentPurpose → patient fields` mapping. No service may define its own field list. This file has no imports from other `src/` paths — it imports only from `src/common/enums` — making it safe to import from any module without creating circular dependencies.
 
+### 11.9 Two-Phase Registration — Phone Nullability
+
+The `patients.phone` column is **nullable** in this implementation, which differs from the original scaffold spec. This was a deliberate change to support the two-phase registration flow: lite signup creates the Patient row with minimal data, and the phone is collected during the onboarding step. HMO coordinators using `POST /auth/register/patient` (the full direct-registration path) still require phone upfront via `RegisterPatientDto`.
+
 ---
 
-*LucenCare Backend — CLAUDE.md v5*  
-*Read ARCHITECTURE.md for full entity schemas, API contracts, and business rules.*
+*LucenCare Backend — CLAUDE.md v6*
+*Read `docs/ARCHITECTURE.md` for full entity schemas, API contracts, and business rules.*
+*Read `docs/specs/` for per-module implementation specs.*

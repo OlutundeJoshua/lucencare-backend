@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/audit.md
-
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -22,8 +20,8 @@ export class AuditService {
     private readonly auditRepo: Repository<AuditLog>,
   ) {}
 
-  async log(_params: AuditLogParams): Promise<void> {
-    // INSERT only — no UPDATE or DELETE ever
-    throw new Error('Not implemented');
+  async log(params: AuditLogParams): Promise<void> {
+    const entry = this.auditRepo.create(params);
+    await this.auditRepo.save(entry);
   }
 }

@@ -15,6 +15,7 @@ interface ProblemDetail {
   title: string;
   status: number;
   detail: string;
+  message: string;
   traceId: string;
   errors?: Array<{ path: string; message: string }>;
 }
@@ -75,6 +76,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       title,
       status,
       detail,
+      message: detail,
       traceId,
       ...(errors ? { errors } : {}),
     };

@@ -17,6 +17,6 @@ export function buildDatabaseOptions(): DataSourceOptions {
     logging: process.env.NODE_ENV === 'development',
     entities: [path.join(src, '**/*.entity{.ts,.js}')],
     migrations: [path.join(src, 'database/migrations/*{.ts,.js}')],
-    subscribers: [path.join(src, 'common/subscribers/*{.ts,.js}')],
+    subscribers: [path.join(src, 'common/subscribers/*.subscriber{.ts,.js}')],
   };
 }

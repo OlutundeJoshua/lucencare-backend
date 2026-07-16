@@ -1,5 +1,7 @@
-import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { Controller, Get, Post, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+
+import { PaginationDto } from 'src/common/dto/pagination.dto';
 
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RoleGuard } from 'src/common/guards/role.guard';
@@ -16,6 +18,12 @@ import { CreateEnrollmentDto, CreateStudyEnrollmentDto } from './dto/enrollment.
 @Roles(UserRole.PATIENT)
 export class EnrollmentsController {
   constructor(private readonly enrollmentsService: EnrollmentsService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'List own program enrollments (cursor-paginated)' })
+  listMine(@Query() query: PaginationDto, @CurrentUser() user: JwtPayload) {
+    return this.enrollmentsService.listMyEnrollments(user.sub, query);
+  }
 
   @Post()
   create(@Body() dto: CreateEnrollmentDto, @CurrentUser() user: JwtPayload) {
@@ -34,6 +42,12 @@ export class EnrollmentsController {
 @Roles(UserRole.PATIENT)
 export class StudyEnrollmentsController {
   constructor(private readonly enrollmentsService: EnrollmentsService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'List own study enrollments (cursor-paginated)' })
+  listMine(@Query() query: PaginationDto, @CurrentUser() user: JwtPayload) {
+    return this.enrollmentsService.listMyStudyEnrollments(user.sub, query);
+  }
 
   @Post()
   create(@Body() dto: CreateStudyEnrollmentDto, @CurrentUser() user: JwtPayload) {

@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   ForbiddenException,
   Get,
@@ -8,7 +9,6 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { Body } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
@@ -26,6 +26,15 @@ import { ProgramsService } from './programs.service';
 @Controller('programs')
 export class ProgramsController {
   constructor(private readonly programsService: ProgramsService) {}
+
+  @Get('browse')
+  @UseGuards(JwtAuthGuard, RoleGuard)
+  @Roles(UserRole.PATIENT)
+  @ApiOperation({ summary: 'Browse approved non-expired programs (patient-facing)' })
+  async browse(@Query() query: PaginationDto) {
+    const { programs, nextCursor } = await this.programsService.browseForPatient(query);
+    return { data: programs, meta: { cursor: nextCursor, limit: query.limit } };
+  }
 
   @Post()
   @UseGuards(JwtAuthGuard, RoleGuard)

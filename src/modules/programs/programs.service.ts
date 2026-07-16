@@ -10,6 +10,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 
+import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { OrgStatus, ProgramStatus, ProgramType } from 'src/common/enums';
 import {
   ADMIN_QUEUE,
@@ -124,6 +125,30 @@ export class ProgramsService {
       throw new ForbiddenException('Access denied: program belongs to a different organization');
     }
     return program;
+  }
+
+  async browseForPatient(
+    query: PaginationDto,
+  ): Promise<{ programs: Pick<Program, 'id' | 'title' | 'type' | 'orgId' | 'expiresAt'>[]; nextCursor?: string }> {
+    const qb = this.programRepo
+      .createQueryBuilder('p')
+      .select(['p.id', 'p.title', 'p.type', 'p.org_id', 'p.expires_at'])
+      .where('p.status = :status', { status: ProgramStatus.APPROVED })
+      .andWhere('p.expires_at > NOW()')
+      .andWhere('p.deleted_at IS NULL')
+      .orderBy('p.id', 'ASC')
+      .take(query.limit + 1);
+
+    if (query.cursor) {
+      qb.andWhere('p.id > :cursor', { cursor: query.cursor });
+    }
+
+    const rows = await qb.getMany();
+    const hasMore = rows.length > query.limit;
+    if (hasMore) rows.pop();
+    const nextCursor = hasMore ? rows[rows.length - 1].id : undefined;
+
+    return { programs: rows, nextCursor };
   }
 
   async getMatchPreview(

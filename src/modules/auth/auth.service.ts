@@ -197,7 +197,7 @@ export class AuthService {
       contactEmail: org.contactEmail,
     });
 
-    return this.buildAuthPayload(user);
+    return this.buildAuthPayload(user, dto.orgName);
   }
 
   async registerResearcher(dto: RegisterResearcherDto): Promise<AuthPayload> {
@@ -276,7 +276,8 @@ export class AuthService {
       resourceType: 'User',
     });
 
-    return this.buildAuthPayload(user);
+    const displayName = await this.resolveDisplayName(user);
+    return this.buildAuthPayload(user, displayName);
   }
 
   async refreshTokens(refreshToken: string): Promise<AuthPayload> {
@@ -307,7 +308,8 @@ export class AuthService {
       await this.redis.set(`refresh:revoked:${payload.jti}`, '1', 'EX', remainingTtl);
     }
 
-    return this.buildAuthPayload(user);
+    const displayName = await this.resolveDisplayName(user);
+    return this.buildAuthPayload(user, displayName);
   }
 
   // BR-11: logout never throws — always treated as successful from the user's perspective
@@ -515,6 +517,17 @@ export class AuthService {
     });
 
     return orgRepo.findOne({ where: { id: orgId } }) as Promise<object>;
+  }
+
+  // For PATIENT users, name lives on the Patient entity, not User.
+  // Called at login and token refresh to keep the name fresh in the client-side auth state.
+  private async resolveDisplayName(user: User): Promise<string | undefined> {
+    if (user.role !== UserRole.PATIENT) return undefined;
+    const patient = await this.dataSource.getRepository(Patient).findOne({
+      where: { userId: user.id },
+      select: ['name'],
+    });
+    return patient?.name;
   }
 
   private buildAuthPayload(user: User, name?: string): AuthPayload {

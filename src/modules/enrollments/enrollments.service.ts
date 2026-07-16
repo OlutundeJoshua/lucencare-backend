@@ -17,6 +17,7 @@ import {
   StudyStatus,
 } from 'src/common/enums';
 import { SNAPSHOT_FIELDS } from 'src/common/constants/snapshot-fields';
+import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { ConsentGrant } from 'src/modules/consents/entities/consent-grant.entity';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { Program } from 'src/modules/programs/entities/program.entity';
@@ -166,6 +167,76 @@ export class EnrollmentsService {
       });
       return manager.getRepository(StudyEnrollment).save(studyEnrollment);
     });
+  }
+
+  async listMyEnrollments(
+    userId: string,
+    query: PaginationDto,
+  ): Promise<{ enrollments: object[]; nextCursor?: string }> {
+    const patientId = await this.resolvePatientId(userId);
+
+    const qb = this.enrollmentRepo
+      .createQueryBuilder('e')
+      .leftJoin(Program, 'p', 'p.id = e.program_id')
+      .select([
+        'e.id AS id',
+        'e.program_id AS "programId"',
+        'e.status AS status',
+        'e.created_at AS "createdAt"',
+        'p.title AS "programTitle"',
+        'p.type AS "programType"',
+        'p.expires_at AS "programExpiresAt"',
+      ])
+      .where('e.patient_id = :patientId', { patientId })
+      .andWhere('e.deleted_at IS NULL')
+      .orderBy('e.id', 'ASC')
+      .limit(query.limit + 1);
+
+    if (query.cursor) {
+      qb.andWhere('e.id > :cursor', { cursor: query.cursor });
+    }
+
+    const rows = await qb.getRawMany();
+    const hasMore = rows.length > query.limit;
+    if (hasMore) rows.pop();
+    const nextCursor = hasMore ? rows[rows.length - 1].id : undefined;
+
+    return { enrollments: rows, nextCursor };
+  }
+
+  async listMyStudyEnrollments(
+    userId: string,
+    query: PaginationDto,
+  ): Promise<{ studyEnrollments: object[]; nextCursor?: string }> {
+    const patientId = await this.resolvePatientId(userId);
+
+    const qb = this.studyEnrollmentRepo
+      .createQueryBuilder('se')
+      .leftJoin(Study, 's', 's.id = se.study_id')
+      .select([
+        'se.id AS id',
+        'se.study_id AS "studyId"',
+        'se.status AS status',
+        'se.created_at AS "createdAt"',
+        's.title AS "studyTitle"',
+        's.status AS "studyStatus"',
+      ])
+      .where('se.patient_id = :patientId', { patientId })
+      .andWhere('se.status != :withdrawn', { withdrawn: StudyEnrollmentStatus.WITHDRAWN })
+      .andWhere('se.deleted_at IS NULL')
+      .orderBy('se.id', 'ASC')
+      .limit(query.limit + 1);
+
+    if (query.cursor) {
+      qb.andWhere('se.id > :cursor', { cursor: query.cursor });
+    }
+
+    const rows = await qb.getRawMany();
+    const hasMore = rows.length > query.limit;
+    if (hasMore) rows.pop();
+    const nextCursor = hasMore ? rows[rows.length - 1].id : undefined;
+
+    return { studyEnrollments: rows, nextCursor };
   }
 
   async revokeByConsentGrant(consentGrantId: string, manager: EntityManager): Promise<void> {

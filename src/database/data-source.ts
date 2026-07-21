@@ -6,6 +6,4 @@ import { buildDatabaseOptions } from '../config/database-options';
 
 dotenv.config();
 
-export const AppDataSource = new DataSource(buildDatabaseOptions());
-
-export default AppDataSource;
+export default new DataSource(buildDatabaseOptions());

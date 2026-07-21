@@ -16,6 +16,8 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 
 import { AuthModule } from './modules/auth/auth.module';
 import { PatientsModule } from './modules/patients/patients.module';
+import { MedicationsModule } from './modules/medications/medications.module';
+import { AppointmentsModule } from './modules/appointments/appointments.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { ConsentsModule } from './modules/consents/consents.module';
 import { ProgramsModule } from './modules/programs/programs.module';
@@ -80,6 +82,8 @@ import { HealthModule } from './health/health.module';
     CommonModule,
     AuthModule,
     PatientsModule,
+    MedicationsModule,
+    AppointmentsModule,
     OrganizationsModule,
     ConsentsModule,
     ProgramsModule,

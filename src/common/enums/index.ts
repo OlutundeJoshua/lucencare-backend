@@ -108,6 +108,8 @@ export enum NotificationType {
   STUDY_MATCH = 'study_match',
   ORG_VERIFIED = 'org_verified',
   HMO_LINK_REQUEST = 'hmo_link_request',
+  MEDICATION_REMINDER = 'medication_reminder',
+  REFILL_ALERT = 'refill_alert',
 }
 
 export enum AuditAction {
@@ -118,9 +120,37 @@ export enum AuditAction {
   LOGIN = 'login',
   CONSENT_CHANGE = 'consent_change',
   CROSS_ORG_ATTEMPT = 'cross_org_attempt',
+  MEDICATION_REFILL_REQUESTED = 'medication_refill_requested',
+}
+
+export enum DoseStatus {
+  TAKEN = 'taken',
+  PENDING = 'pending',
+  LATER = 'later',
+  SKIPPED = 'skipped',
 }
 
 export enum TokenPurpose {
   PDF_EXPORT = 'pdf_export',
   OTP_VERIFY = 'otp_verify',
+}
+
+export enum AppointmentType {
+  CONSULTATION = 'consultation',
+  FOLLOW_UP = 'follow_up',
+  LAB_TEST = 'lab_test',
+  PHYSIOTHERAPY = 'physiotherapy',
+  SPECIALIST_REVIEW = 'specialist_review',
+}
+
+export enum AppointmentStatus {
+  CONFIRMED = 'confirmed',
+  PENDING = 'pending',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+}
+
+export enum AppointmentConfirmationAction {
+  CREATED = 'created',
+  RESCHEDULED = 'rescheduled',
 }

@@ -22,7 +22,14 @@ import { Redis } from 'ioredis';
 
 import { AuditAction, ConsentPurpose, ConsentStatus, OrgStatus, OrgType, UserRole } from 'src/common/enums';
 import { SNAPSHOT_FIELDS } from 'src/common/constants/snapshot-fields';
-import { ADMIN_QUEUE, MAIL_QUEUE, ORG_VERIFICATION_JOB, SEND_OTP_JOB, SEND_RESET_PASSWORD_JOB } from 'src/queues/queues.constants';
+import {
+  ADMIN_QUEUE,
+  MAIL_QUEUE,
+  ORG_VERIFICATION_JOB,
+  SEND_OTP_JOB,
+  SEND_PATIENT_ONBOARDING_WELCOME_JOB,
+  SEND_RESET_PASSWORD_JOB,
+} from 'src/queues/queues.constants';
 import { AuditService } from 'src/modules/audit/audit.service';
 
 import { User } from './entities/user.entity';
@@ -422,6 +429,8 @@ export class AuthService {
     const patient = await patientRepo.findOne({ where: { userId } });
     if (!patient) throw new ConflictException('Patient profile not found for this user');
 
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+
     const conditionTags = dto.conditions
       ? dto.conditions.split(',').map((c) => c.trim()).filter(Boolean)
       : [];
@@ -468,6 +477,13 @@ export class AuthService {
         }
       }
     });
+
+    if (user) {
+      await this.mailQueue.add(SEND_PATIENT_ONBOARDING_WELCOME_JOB, {
+        to: user.email,
+        patientName: patient.name,
+      });
+    }
 
     return patientRepo.findOne({ where: { userId } }) as Promise<object>;
   }

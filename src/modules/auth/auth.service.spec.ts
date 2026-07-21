@@ -9,7 +9,14 @@ import { getQueueToken } from '@nestjs/bullmq';
 import { DataSource } from 'typeorm';
 
 import { AuditAction, ConsentStatus, OrgStatus, UserRole } from 'src/common/enums';
-import { ADMIN_QUEUE, MAIL_QUEUE, ORG_VERIFICATION_JOB, SEND_OTP_JOB, SEND_RESET_PASSWORD_JOB } from 'src/queues/queues.constants';
+import {
+  ADMIN_QUEUE,
+  MAIL_QUEUE,
+  ORG_VERIFICATION_JOB,
+  SEND_OTP_JOB,
+  SEND_PATIENT_ONBOARDING_WELCOME_JOB,
+  SEND_RESET_PASSWORD_JOB,
+} from 'src/queues/queues.constants';
 import { AuditService } from 'src/modules/audit/audit.service';
 
 import { AuthService } from './auth.service';
@@ -92,7 +99,7 @@ describe('AuthService', () => {
   let mockJwt: ReturnType<typeof makeMockJwt>;
   let mockConfig: ReturnType<typeof makeMockConfig>;
   let mockAudit: { log: jest.Mock };
-  let mockDataSource: { transaction: jest.Mock };
+  let mockDataSource: { transaction: jest.Mock; getRepository: jest.Mock };
 
   beforeEach(async () => {
     userRepo = makeMockRepo();
@@ -102,7 +109,7 @@ describe('AuthService', () => {
     mockJwt = makeMockJwt();
     mockConfig = makeMockConfig();
     mockAudit = { log: jest.fn() };
-    mockDataSource = { transaction: jest.fn() };
+    mockDataSource = { transaction: jest.fn(), getRepository: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -497,6 +504,79 @@ describe('AuthService', () => {
       await expect(service.resetPassword({ token: 'stale-token', password: 'newpassword' })).rejects.toThrow(
         UnauthorizedException,
       );
+    });
+  });
+
+  // -------------------------
+  // completePatientOnboarding
+  // -------------------------
+  describe('completePatientOnboarding', () => {
+    const userId = 'USER01234567890123456789';
+    const dto = {
+      accountType: 'patient',
+      dateOfBirth: '1990-01-01',
+      biologicalSex: 'female',
+      country: 'NG',
+      conditions: 'Diabetes, Hypertension',
+      primaryLanguage: 'en',
+      termsConsent: true as const,
+      ngoConsent: true,
+      researchConsent: false,
+    };
+
+    it('updates the patient profile, upserts consent grants, and enqueues a welcome email after the transaction resolves', async () => {
+      const patient = { id: 'PAT01234567890123456789', userId, name: 'Ada Okafor' };
+      const patientRepo = makeMockRepo();
+      patientRepo.findOne.mockResolvedValue(patient);
+
+      const { manager, patientRepo: txPatientRepo, consentRepo } = makeTransactionManager();
+      txPatientRepo.update.mockResolvedValue({ affected: 1 });
+      consentRepo.findOne.mockResolvedValue(null);
+      consentRepo.create.mockImplementation((data: unknown) => data);
+      consentRepo.save.mockResolvedValue({});
+
+      mockDataSource.getRepository.mockImplementation((entity: { name: string }) =>
+        entity.name === 'Patient' ? patientRepo : makeMockRepo(),
+      );
+      mockDataSource.transaction.mockImplementation(async (fn: (m: typeof manager) => Promise<unknown>) =>
+        fn(manager as never),
+      );
+      userRepo.findOne.mockResolvedValue(makeUser({ id: userId, email: 'ada@example.com' }));
+
+      await service.completePatientOnboarding(userId, dto as never);
+
+      expect(mockDataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(txPatientRepo.update).toHaveBeenCalledWith(
+        { userId },
+        expect.objectContaining({ isCaregiver: false, country: 'NG' }),
+      );
+      expect(mockMailQueue.add).toHaveBeenCalledWith(SEND_PATIENT_ONBOARDING_WELCOME_JOB, {
+        to: 'ada@example.com',
+        patientName: 'Ada Okafor',
+      });
+    });
+
+    it('throws 409 when the patient profile does not exist', async () => {
+      const patientRepo = makeMockRepo();
+      patientRepo.findOne.mockResolvedValue(null);
+      mockDataSource.getRepository.mockReturnValue(patientRepo);
+
+      await expect(service.completePatientOnboarding(userId, dto as never)).rejects.toThrow(ConflictException);
+      expect(mockMailQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('does not enqueue the welcome email when the transaction fails', async () => {
+      const patient = { id: 'PAT01234567890123456789', userId, name: 'Ada Okafor' };
+      const patientRepo = makeMockRepo();
+      patientRepo.findOne.mockResolvedValue(patient);
+      mockDataSource.getRepository.mockReturnValue(patientRepo);
+      mockDataSource.transaction.mockRejectedValue(new Error('constraint violation'));
+      userRepo.findOne.mockResolvedValue(makeUser({ id: userId }));
+
+      await expect(service.completePatientOnboarding(userId, dto as never)).rejects.toThrow(
+        'constraint violation',
+      );
+      expect(mockMailQueue.add).not.toHaveBeenCalled();
     });
   });
 });

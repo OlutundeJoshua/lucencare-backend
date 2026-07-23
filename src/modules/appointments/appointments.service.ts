@@ -6,6 +6,7 @@ import { Queue } from 'bullmq';
 
 import { AppointmentConfirmationAction, AppointmentStatus } from 'src/common/enums';
 import { MAIL_QUEUE, SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
+import { SendAppointmentConfirmationJob } from 'src/queues/interfaces/send-appointment-confirmation-job.interface';
 import { PatientsService } from 'src/modules/patients/patients.service';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { User } from 'src/modules/auth/entities/user.entity';
@@ -14,24 +15,7 @@ import { Appointment } from './entities/appointment.entity';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
-
-export interface AppointmentStatsResult {
-  upcoming: number;
-  thisMonth: number;
-  completed: number;
-  cancelled: number;
-}
-
-interface AppointmentConfirmationJob {
-  to: string;
-  patientName: string;
-  appointmentDate: string;
-  time: string;
-  provider: string;
-  specialty: string;
-  facility: string;
-  action: AppointmentConfirmationAction;
-}
+import { AppointmentStatsResult } from './interfaces/appointment-stats-result.interface';
 
 @Injectable()
 export class AppointmentsService {
@@ -192,7 +176,7 @@ export class AppointmentsService {
     const user = await this.userRepo.findOne({ where: { id: patient.userId } });
     if (!user) return;
 
-    const payload: AppointmentConfirmationJob = {
+    const payload: SendAppointmentConfirmationJob = {
       to: user.email,
       patientName: patient.name,
       appointmentDate: appointment.appointmentDate,

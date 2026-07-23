@@ -2,6 +2,9 @@
 
 import { ConsentPurpose } from 'src/common/enums';
 
+// Contact fields stripped from sharedDataSnapshot when directContactShared=false.
+export const CONTACT_FIELDS = ['email', 'phone', 'contactEmail', 'contactPhone'];
+
 export const SNAPSHOT_FIELDS: Record<ConsentPurpose, string[]> = {
   [ConsentPurpose.NGO_FUNDING]: ['name', 'conditionTags', 'address', 'directContactShared'],
   [ConsentPurpose.HMO_CARE]: [

@@ -49,6 +49,10 @@ src/
 │   │   └── entity-actor.subscriber.ts  # TypeORM subscriber — auto-fills createdBy/updatedBy from CLS
 │   ├── enums/
 │   │   └── index.ts                    # All platform enums live here
+│   ├── interfaces/
+│   │   ├── jwt-payload.interface.ts    # Canonical JWT payload shape — the only JwtPayload in the codebase
+│   │   ├── problem-detail.interface.ts
+│   │   └── paginated-payload.type.ts   # Cross-module interfaces/types only — see §4.4
 │   ├── constants/
 │   │   └── snapshot-fields.ts          # ConsentPurpose → field[] mapping — single source of truth for sharedDataSnapshot
 │   ├── guards/
@@ -86,6 +90,8 @@ src/
 ├── queues/
 │   ├── queues.module.ts
 │   ├── queues.constants.ts
+│   ├── interfaces/                     # One <job-name>-job.interface.ts per BullMQ job payload
+│   │   └── send-otp-job.interface.ts
 │   └── processors/
 │       ├── fan-out-notify.processor.ts
 │       ├── batch-notify.processor.ts
@@ -123,6 +129,8 @@ modules/<name>/
 ├── <name>.service.spec.ts
 ├── entities/
 │   └── <entity>.entity.ts
+├── interfaces/                # Only if the module has interfaces/types not covered by dto/ or entities/ — see §4.4
+│   └── <name>.interface.ts
 └── dto/
     ├── create-<name>.dto.ts
     ├── update-<name>.dto.ts
@@ -163,6 +171,8 @@ Every file in a module follows this pattern exactly:
 create-<name>.dto.ts
 update-<name>.dto.ts
 lookup-<name>.dto.ts
+<name>.interface.ts         ← plain interface (not a DTO, not an entity)
+<name>.type.ts              ← plain type alias / union type
 <name>.processor.ts
 <name>.processor.spec.ts    ← processor unit test
 <name>.gateway.ts
@@ -199,6 +209,26 @@ import { BaseEntity } from 'src/common/entities/base.entity';
 import { ConsentGrant } from './entities/consent-grant.entity';
 import { UpdateConsentDto } from './dto/update-consent.dto';
 ```
+
+### 4.4 Interfaces, Types & Enums Placement
+
+**Never declare a plain `interface`, `type` alias, or lookup-table type inline inside a `.service.ts`, `.controller.ts`, `.processor.ts`, `.gateway.ts`, `.decorator.ts`, `.filter.ts`, or `.interceptor.ts` file.** Every one of these gets its own file, one declaration per file, named `<name>.interface.ts` (interfaces) or `<name>.type.ts` (type aliases / unions) — exactly the same one-declaration-per-file discipline already used for entities and DTOs.
+
+This does **not** apply to `enum` — all platform enums still live exclusively in `src/common/enums/index.ts` (unchanged). It also does not apply to `class-validator` DTOs, which stay in each module's `dto/` folder.
+
+**Where the file goes** depends on how many places import the type:
+
+| Scope | Location | Example |
+|---|---|---|
+| Used only within one module (its service, controller, and/or that module's own processors) | `modules/<name>/interfaces/<thing>.interface.ts` | `modules/medications/interfaces/refill-alert-result.interface.ts` |
+| Used across two or more modules (e.g. a shape returned by one service and consumed by another module's DTO or controller) | `src/common/interfaces/<thing>.interface.ts` | `src/common/interfaces/jwt-payload.interface.ts` |
+| A BullMQ job payload (the `Job<T>` generic for a processor) | `src/queues/interfaces/<job-name>-job.interface.ts` | `src/queues/interfaces/send-otp-job.interface.ts` |
+
+**Rules:**
+- One interface or type per file — do not bundle unrelated shapes into a shared `types.ts` grab-bag file.
+- A queue job's payload interface is the single source of truth: the processor that consumes it and the service that enqueues it must both import the same file. Never let the producer and consumer each define their own local copy of the same job shape — this is exactly the kind of drift that produces silent runtime bugs when the two definitions disagree.
+- There is exactly one canonical `JwtPayload`, defined at `src/common/interfaces/jwt-payload.interface.ts`. Do not redeclare it anywhere else, including in `JwtStrategy` or in `@CurrentUser()`.
+- If you're unsure whether a type is module-local or shared, check for existing imports across modules first (`grep -rn "TypeName" src`) before deciding where the file goes — do not default to `common/interfaces/` just to be safe, since that erodes the point of scoping types to their owning module.
 
 ---
 
@@ -843,6 +873,6 @@ The `patients.phone` column is **nullable** in this implementation, which differ
 
 ---
 
-*LucenCare Backend — CLAUDE.md v6*
+*LucenCare Backend — CLAUDE.md v7*
 *Read `docs/ARCHITECTURE.md` for full entity schemas, API contracts, and business rules.*
 *Read `docs/specs/` for per-module implementation specs.*

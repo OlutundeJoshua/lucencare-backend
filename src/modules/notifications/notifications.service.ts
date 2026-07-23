@@ -1,5 +1,7 @@
 // TODO: Implement — see docs/modules/notifications.md
 
+import { ulid } from 'ulid';
+
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -23,12 +25,21 @@ export class NotificationsService {
     throw new Error('Not implemented');
   }
 
-  async createBulk(_userIds: string[], _type: NotificationType, _payload: object) {
-    // Single bulk INSERT — called by batch_notify processor
-    throw new Error('Not implemented');
+  // Single bulk INSERT — called by batch_notify processor. Never more than 200 records at once.
+  async createBulk(userIds: string[], type: NotificationType, payload: object): Promise<void> {
+    if (userIds.length === 0) return;
+
+    const notifications = userIds.map((userId) => this.notificationRepo.create({ id: ulid(), userId, type, payload }));
+    await this.notificationRepo
+      .createQueryBuilder()
+      .insert()
+      .into(Notification)
+      .values(notifications)
+      .execute();
   }
 
-  async createOne(_userId: string, _type: NotificationType, _payload: object) {
-    throw new Error('Not implemented');
+  async createOne(userId: string, type: NotificationType, payload: object): Promise<Notification> {
+    const notification = this.notificationRepo.create({ userId, type, payload });
+    return this.notificationRepo.save(notification);
   }
 }

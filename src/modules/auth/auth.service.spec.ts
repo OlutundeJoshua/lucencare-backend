@@ -238,7 +238,8 @@ describe('AuthService', () => {
         ORG_VERIFICATION_JOB,
         expect.objectContaining({ orgId: createdOrg.id }),
       );
-      expect(result.user.role).toBe(UserRole.NGO_ADMIN);
+      // buildAuthPayload maps internal roles to the frontend's short-form role strings
+      expect(result.user.role).toBe('ngo');
     });
 
     it('throws 409 when email is already registered', async () => {
@@ -344,6 +345,8 @@ describe('AuthService', () => {
       const hash = await bcrypt.hash('correctpassword', 1);
       const user = makeUser({ passwordHash: hash, status: 'active' });
       userRepo.findOne.mockResolvedValue(user);
+      // login resolves display name via dataSource.getRepository(Patient) for PATIENT users
+      mockDataSource.getRepository.mockReturnValue({ findOne: jest.fn().mockResolvedValue(null) });
 
       const result = await service.login({ email: user.email, password: 'correctpassword' });
 
@@ -390,6 +393,8 @@ describe('AuthService', () => {
       mockRedis.get.mockResolvedValue(null);
       userRepo.findOne.mockResolvedValue(makeUser());
       mockRedis.set.mockResolvedValue('OK');
+      // refreshTokens resolves display name via dataSource.getRepository(Patient) for PATIENT users
+      mockDataSource.getRepository.mockReturnValue({ findOne: jest.fn().mockResolvedValue(null) });
 
       const result = await service.refreshTokens('old.refresh.token');
 

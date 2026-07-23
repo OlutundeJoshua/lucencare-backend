@@ -4,8 +4,7 @@ import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 
 import { StandardResponse } from 'src/common/dto/response.dto';
-
-type PaginatedPayload<T> = { data: T; meta: StandardResponse<T>['meta'] };
+import { PaginatedPayload } from 'src/common/interfaces/paginated-payload.type';
 
 @Injectable()
 export class TransformInterceptor<T> implements NestInterceptor<T, StandardResponse<T>> {

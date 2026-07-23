@@ -18,7 +18,8 @@ import { UserRole } from 'src/common/enums';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RoleGuard } from 'src/common/guards/role.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
-import { CurrentUser, JwtPayload } from 'src/common/decorators/current-user.decorator';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import { JwtPayload } from 'src/common/interfaces/jwt-payload.interface';
 
 import { PatientsService } from './patients.service';
 import {

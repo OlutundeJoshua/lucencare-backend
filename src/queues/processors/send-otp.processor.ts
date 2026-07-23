@@ -1,15 +1,23 @@
-// TODO: Implement — see docs/modules/queues.md
-
-import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
+import { Injectable } from '@nestjs/common';
 
-import { MAIL_QUEUE, SEND_OTP_JOB } from 'src/queues/queues.constants';
+import { SEND_OTP_JOB } from 'src/queues/queues.constants';
+import { MailService } from 'src/modules/mail/mail.service';
+import { SendOtpJob } from 'src/queues/interfaces/send-otp-job.interface';
 
-@Processor(MAIL_QUEUE)
-export class SendOtpProcessor extends WorkerHost {
-  async process(job: Job): Promise<void> {
+@Injectable()
+export class SendOtpProcessor {
+  constructor(private readonly mailService: MailService) {}
+
+  async process(job: Job<SendOtpJob>): Promise<void> {
     if (job.name !== SEND_OTP_JOB) return;
-    // Sends OTP email to researcher — stores code in Redis with OTP_TTL_SECONDS
-    throw new Error('Not implemented');
+
+    const { to, code, expiresInMinutes } = job.data;
+
+    await this.mailService.send(
+      to,
+      'Your LucenCare verification code',
+      `Hello,\n\nYour one-time verification code is ${code}.\n\nThis code expires in ${expiresInMinutes} minutes. If you did not request this code, you can safely ignore this email.\n\nThe LucenCare Team`,
+    );
   }
 }

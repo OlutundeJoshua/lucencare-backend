@@ -46,6 +46,7 @@ import {
   ResetPasswordDto,
   SignupDto,
 } from './dto/auth.dto';
+import { AuthPayload } from './interfaces/auth-payload.interface';
 
 // Assumption A-1: Patient and org registration use DataSource.transaction() with manager.getRepository()
 // directly for atomic cross-entity writes. PatientsService.createForUser() does not exist in the
@@ -60,12 +61,6 @@ import { ConsentGrant } from 'src/modules/consents/entities/consent-grant.entity
 
 const OTP_TTL_SECONDS = 600; // 10 minutes — spec says 600; app.config defaults to 300 (see follow-up A-5)
 const RESET_TOKEN_TTL_SECONDS = 3600; // 1 hour
-
-export interface AuthPayload {
-  accessToken: string;
-  refreshToken: string;
-  user: { id: string; name?: string; email: string; role: string; status: string; orgId?: string };
-}
 
 @Injectable()
 export class AuthService {

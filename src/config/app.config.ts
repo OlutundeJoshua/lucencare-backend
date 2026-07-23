@@ -6,6 +6,7 @@ export default registerAs('app', () => ({
   apiPrefix: process.env.API_PREFIX ?? 'api',
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:3001',
   wsCorsOrigin: process.env.WS_CORS_ORIGIN ?? 'http://localhost:3001',
+  frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:3001',
 
   redisHost: process.env.REDIS_HOST ?? 'localhost',
   redisPort: parseInt(process.env.REDIS_PORT ?? '6379', 10),

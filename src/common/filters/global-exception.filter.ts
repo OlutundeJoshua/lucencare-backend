@@ -10,15 +10,7 @@ import {
 import { Request, Response } from 'express';
 import { ClsService } from 'nestjs-cls';
 
-interface ProblemDetail {
-  type: string;
-  title: string;
-  status: number;
-  detail: string;
-  message: string;
-  traceId: string;
-  errors?: Array<{ path: string; message: string }>;
-}
+import { ProblemDetail } from 'src/common/interfaces/problem-detail.interface';
 
 @Catch()
 @Injectable()

@@ -4,17 +4,7 @@ import { Injectable } from '@nestjs/common';
 import { AppointmentConfirmationAction } from 'src/common/enums';
 import { SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
-
-interface SendAppointmentConfirmationJob {
-  to: string;
-  patientName: string;
-  appointmentDate: string;
-  time: string;
-  provider: string;
-  specialty: string;
-  facility: string;
-  action: AppointmentConfirmationAction;
-}
+import { SendAppointmentConfirmationJob } from 'src/queues/interfaces/send-appointment-confirmation-job.interface';
 
 // Add a new action to AppointmentConfirmationAction (src/common/enums) and a matching
 // entry here — no other branching logic needed.
@@ -42,7 +32,7 @@ export class SendAppointmentConfirmationProcessor {
     await this.mailService.send(
       to,
       subject,
-      `Hi ${patientName}, your ${specialty} appointment with ${provider} ${verb} ${appointmentDate} at ${time}, at ${facility}.`,
+      `Hi ${patientName},\n\nYour ${specialty} appointment with ${provider} ${verb} ${appointmentDate} at ${time}, at ${facility}.\n\nIf you have any questions or need to make changes, please contact us.\n\nThe LucenCare Team`,
     );
   }
 }

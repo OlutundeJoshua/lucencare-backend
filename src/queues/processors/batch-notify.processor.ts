@@ -1,12 +1,12 @@
 // TODO: Implement — see docs/modules/queues.md
 
-import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
+import { Injectable } from '@nestjs/common';
 
-import { NOTIFICATIONS_QUEUE, BATCH_NOTIFY_JOB } from 'src/queues/queues.constants';
+import { BATCH_NOTIFY_JOB } from 'src/queues/queues.constants';
 
-@Processor(NOTIFICATIONS_QUEUE)
-export class BatchNotifyProcessor extends WorkerHost {
+@Injectable()
+export class BatchNotifyProcessor {
   async process(job: Job): Promise<void> {
     if (job.name !== BATCH_NOTIFY_JOB) return;
     // Single bulk INSERT into notifications for all patient IDs in batch

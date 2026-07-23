@@ -9,6 +9,7 @@ import { ThrottlerStorageRedisService } from 'nestjs-throttler-storage-redis';
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import jwtConfig from './config/jwt.config';
+import mailConfig from './config/mail.config';
 
 import { CommonModule } from './common/common.module';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
@@ -37,7 +38,7 @@ import { HealthModule } from './health/health.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, databaseConfig, jwtConfig],
+      load: [appConfig, databaseConfig, jwtConfig, mailConfig],
       envFilePath: '.env',
     }),
 

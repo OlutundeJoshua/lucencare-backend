@@ -7,6 +7,7 @@ import { ClsService } from 'nestjs-cls';
 
 import { UserRole } from 'src/common/enums';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
+import { ApplicationsService } from 'src/modules/applications/applications.service';
 
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -39,6 +40,11 @@ const mockAuthService = {
   resetPassword: jest.fn().mockResolvedValue(undefined),
 };
 
+const mockApplicationsService = {
+  createProfessional: jest.fn(),
+  createBenefactor: jest.fn(),
+};
+
 describe('AuthController (integration)', () => {
   let app: INestApplication;
 
@@ -47,6 +53,7 @@ describe('AuthController (integration)', () => {
       controllers: [AuthController],
       providers: [
         { provide: AuthService, useValue: mockAuthService },
+        { provide: ApplicationsService, useValue: mockApplicationsService },
         // ClsService is required by JwtAuthGuard (which is used on the logout endpoint)
         { provide: ClsService, useValue: { get: jest.fn(), set: jest.fn() } },
         // ConfigService is required by AuthController.setRefreshCookie() to check nodeEnv

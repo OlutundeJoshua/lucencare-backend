@@ -51,4 +51,10 @@ export class Patient extends BaseEntity {
 
   @Column({ name: 'is_caregiver', type: 'boolean', default: false })
   isCaregiver: boolean;
+
+  @Column({ name: 'timezone', type: 'text', nullable: true })
+  timezone?: string;
+
+  @Column({ name: 'medication_reminders_enabled', type: 'boolean', default: true })
+  medicationRemindersEnabled: boolean;
 }

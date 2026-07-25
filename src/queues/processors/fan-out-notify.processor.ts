@@ -1,12 +1,12 @@
 // TODO: Implement — see docs/modules/queues.md
 
-import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
+import { Injectable } from '@nestjs/common';
 
-import { NOTIFICATIONS_QUEUE, FAN_OUT_NOTIFY_JOB } from 'src/queues/queues.constants';
+import { FAN_OUT_NOTIFY_JOB } from 'src/queues/queues.constants';
 
-@Processor(NOTIFICATIONS_QUEUE)
-export class FanOutNotifyProcessor extends WorkerHost {
+@Injectable()
+export class FanOutNotifyProcessor {
   async process(job: Job): Promise<void> {
     if (job.name !== FAN_OUT_NOTIFY_JOB) return;
     // Pages eligible patients in batches of 200

@@ -128,7 +128,23 @@ export enum DoseStatus {
   PENDING = 'pending',
   LATER = 'later',
   SKIPPED = 'skipped',
+  // Computed display state only — MedicationsService overlays this onto a
+  // PENDING dose that falls within the due-now window. Never persisted:
+  // LogDoseDto restricts patient-submitted statuses to exclude it.
+  DUE_NOW = 'due_now',
 }
+
+// Subset of DoseStatus a patient may actually submit via POST /medications/:id/doses/log —
+// excludes DUE_NOW, which is a read-only overlay computed by MedicationsService and must
+// never be written to the DB. A real enum can't subset another without duplicating string
+// literals as a nominally distinct type, so this stays a union of the real DoseStatus members.
+export const LOGGABLE_DOSE_STATUSES = [
+  DoseStatus.TAKEN,
+  DoseStatus.PENDING,
+  DoseStatus.LATER,
+  DoseStatus.SKIPPED,
+] as const;
+export type LoggableDoseStatus = (typeof LOGGABLE_DOSE_STATUSES)[number];
 
 export enum TokenPurpose {
   PDF_EXPORT = 'pdf_export',

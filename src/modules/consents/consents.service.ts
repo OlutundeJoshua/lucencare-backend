@@ -21,12 +21,7 @@ import { StudyEnrollment } from 'src/modules/enrollments/entities/study-enrollme
 import { ConsentGrant } from './entities/consent-grant.entity';
 import { CreateConsentGrantDto } from './dto/create-consent-grant.dto';
 import { UpdateConsentDto } from './dto/update-consent.dto';
-
-export interface ConsentImpact {
-  affectedEnrollments: Array<{ id: string; programId: string; programTitle: string; status: EnrollmentStatus }>;
-  affectedStudyEnrollments: Array<{ id: string; studyId: string; studyTitle: string; status: StudyEnrollmentStatus }>;
-  totalAffected: number;
-}
+import { ConsentImpact } from './interfaces/consent-impact.interface';
 
 // Valid state machine transitions. All others throw ConflictException (BR-1, BR-2).
 const VALID_TRANSITIONS: Partial<Record<ConsentStatus, ConsentStatus[]>> = {

@@ -17,55 +17,18 @@ import { CreateMedicationDto } from './dto/create-medication.dto';
 import { UpdateMedicationDto } from './dto/update-medication.dto';
 import { LogDoseDto } from './dto/log-dose.dto';
 import { RegisterRemindersDto } from './dto/register-reminders.dto';
+import { RefillUrgency } from './interfaces/refill-urgency.type';
+import { ScheduledDoseResult } from './interfaces/scheduled-dose-result.interface';
+import { ScheduleSlotResult } from './interfaces/schedule-slot-result.interface';
+import { RefillAlertResult } from './interfaces/refill-alert-result.interface';
+import { MedicationStats } from './interfaces/medication-stats.interface';
+import { ReminderTarget } from './interfaces/reminder-target.interface';
+import { RefillAlertTarget } from './interfaces/refill-alert-target.interface';
 
 const URGENT_THRESHOLD_DAYS = 7;
 const UPCOMING_THRESHOLD_DAYS = 14;
 const MAX_STREAK_LOOKBACK_DAYS = 365;
-
-export type RefillUrgency = 'urgent' | 'upcoming' | 'ok';
-
-export interface ScheduledDoseResult {
-  doseLogId: string;
-  medicationId: string;
-  medName: string;
-  dosage: string;
-  note?: string;
-  status: DoseStatus;
-}
-
-export interface ScheduleSlotResult {
-  time: string;
-  doses: ScheduledDoseResult[];
-}
-
-export interface RefillAlertResult {
-  medicationId: string;
-  name: string;
-  pillsLeft: number;
-  refillDateISO: string;
-  urgency: RefillUrgency;
-}
-
-export interface MedicationStats {
-  activeMeds: number;
-  takenToday: number;
-  dueToday: number;
-  adherenceStreakDays: number;
-}
-
-export interface ReminderTarget {
-  email: string;
-  medicationName: string;
-  dosage: string;
-  scheduledTime: string;
-}
-
-export interface RefillAlertTarget {
-  userId: string;
-  medicationId: string;
-  medicationName: string;
-  urgency: RefillUrgency;
-}
+const DUE_NOW_WINDOW_MINUTES = 15;
 
 // The frontend only ever offers these 4 fixed dose-time slots — mapped to 24h
 // local time so the reminder tick can match against Intl-derived HH:mm.
@@ -175,6 +138,7 @@ export class MedicationsService {
 
     const logs = await this.doseLogRepo.find({ where: { patientId: patient.id, doseDate: targetDate } });
     const medById = new Map(medications.map((m) => [m.id, m]));
+    const nowLocal = this.nowInTimezone(new Date(), patient.timezone ?? 'UTC');
 
     const slots = new Map<string, ScheduleSlotResult>();
     for (const log of logs) {
@@ -190,7 +154,7 @@ export class MedicationsService {
         medName: med.name,
         dosage: med.dosage,
         note: med.notes,
-        status: log.status,
+        status: this.resolveDisplayStatus(log.status, log.scheduledTime, targetDate, nowLocal),
       });
     }
 
@@ -395,6 +359,58 @@ export class MedicationsService {
     } catch {
       return undefined;
     }
+  }
+
+  private nowInTimezone(now: Date, timezone: string): { dateIso: string; minutes: number } | undefined {
+    try {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(now);
+      const get = (type: string) => parts.find((p) => p.type === type)?.value;
+      const year = get('year');
+      const month = get('month');
+      const day = get('day');
+      const hour = get('hour');
+      const minute = get('minute');
+      if (!year || !month || !day || !hour || !minute) return undefined;
+      return { dateIso: `${year}-${month}-${day}`, minutes: Number(hour) * 60 + Number(minute) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Overlays DUE_NOW onto a PENDING dose when the patient's local time is
+  // within DUE_NOW_WINDOW_MINUTES of the scheduled slot. Only applies to the
+  // day being viewed as "today" in the patient's own timezone. This is a
+  // read-time overlay only — the persisted log row stays PENDING, since
+  // LogDoseDto never accepts DUE_NOW as a status a patient can write.
+  private resolveDisplayStatus(
+    status: DoseStatus,
+    scheduledTime: string,
+    doseDate: string,
+    nowLocal: { dateIso: string; minutes: number } | undefined,
+  ): DoseStatus {
+    if (status !== DoseStatus.PENDING || !nowLocal || nowLocal.dateIso !== doseDate) return status;
+
+    const scheduledMinutes = this.parseTimeLabelToMinutes(scheduledTime);
+    if (scheduledMinutes === undefined) return status;
+
+    return Math.abs(nowLocal.minutes - scheduledMinutes) <= DUE_NOW_WINDOW_MINUTES ? DoseStatus.DUE_NOW : status;
+  }
+
+  private parseTimeLabelToMinutes(label: string): number | undefined {
+    const match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(label.trim());
+    if (!match) return undefined;
+
+    let hour = Number(match[1]) % 12;
+    if (match[3].toUpperCase() === 'PM') hour += 12;
+    return hour * 60 + Number(match[2]);
   }
 
   private async getOwnedMedication(userId: string, id: string): Promise<Medication> {

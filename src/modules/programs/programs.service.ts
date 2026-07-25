@@ -25,13 +25,7 @@ import { MatchingService } from 'src/modules/matching/matching.service';
 import { CreateProgramDto } from './dto/create-program.dto';
 import { ListProgramsDto } from './dto/list-programs.dto';
 import { Program } from './entities/program.entity';
-
-export interface EnrollmentSnapshot {
-  id: string;
-  status: string;
-  sharedDataSnapshot: Record<string, unknown>;
-  createdAt: string;
-}
+import { EnrollmentSnapshot } from './interfaces/enrollment-snapshot.interface';
 
 @Injectable()
 export class ProgramsService {

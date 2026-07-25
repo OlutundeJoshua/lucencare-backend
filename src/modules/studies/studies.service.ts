@@ -10,6 +10,7 @@ import { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 
 import { StudyEnrollmentStatus, StudyStatus } from 'src/common/enums';
+import { CONTACT_FIELDS } from 'src/common/constants/snapshot-fields';
 import { ADMIN_QUEUE, STUDY_REVIEW_JOB } from 'src/queues/queues.constants';
 import { StudyEnrollment } from 'src/modules/enrollments/entities/study-enrollment.entity';
 import { MatchingService } from 'src/modules/matching/matching.service';
@@ -17,10 +18,7 @@ import { MatchingService } from 'src/modules/matching/matching.service';
 import { CreateStudyDto } from './dto/create-study.dto';
 import { ListStudiesDto, ListStudyEnrollmentsDto } from './dto/list-studies.dto';
 import { Study } from './entities/study.entity';
-
-// A-5: Contact fields stripped from sharedDataSnapshot when directContactShared=false.
-// TODO: Move CONTACT_FIELDS to src/common/constants/snapshot-fields.ts when that file is implemented.
-const CONTACT_FIELDS = ['email', 'phone', 'contactEmail', 'contactPhone'];
+import { StudyEnrollmentSnapshot } from './interfaces/study-enrollment-snapshot.interface';
 
 const VALID_INVITE_TRANSITIONS: Record<StudyEnrollmentStatus, StudyEnrollmentStatus | null> = {
   [StudyEnrollmentStatus.INTERESTED]: StudyEnrollmentStatus.SCREENED,
@@ -28,15 +26,6 @@ const VALID_INVITE_TRANSITIONS: Record<StudyEnrollmentStatus, StudyEnrollmentSta
   [StudyEnrollmentStatus.ENROLLED]: null,
   [StudyEnrollmentStatus.WITHDRAWN]: null,
 };
-
-export interface StudyEnrollmentSnapshot {
-  id: string;
-  studyId: string;
-  status: StudyEnrollmentStatus;
-  sharedDataSnapshot: Record<string, unknown>;
-  directContactShared: boolean;
-  createdAt: string;
-}
 
 @Injectable()
 export class StudiesService {

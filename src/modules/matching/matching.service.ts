@@ -10,26 +10,9 @@ import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { Program } from 'src/modules/programs/entities/program.entity';
 import { Study } from 'src/modules/studies/entities/study.entity';
 
-export interface EligibilityCriterion {
-  field: string;
-  operator: 'eq' | 'in' | 'gte' | 'lte' | 'contains';
-  value: unknown;
-}
-
-export interface MatchPreview {
-  eligibleCount: number;
-  tagSummary: Record<string, number>;
-}
-
-export interface PaginatedPatientIds {
-  patientIds: string[];
-  nextCursor?: string;
-}
-
-export interface PaginatedResult<T> {
-  data: T[];
-  nextCursor?: string;
-}
+import { EligibilityCriterion } from './interfaces/eligibility-criterion.interface';
+import { MatchPreview } from './interfaces/match-preview.interface';
+import { PaginatedPatientIds, PaginatedResult } from './interfaces/paginated-result.interface';
 
 const MATCH_INDEX_TTL_SECONDS = 3600;
 const ELIGIBLE_PAGE_SIZE = 200;

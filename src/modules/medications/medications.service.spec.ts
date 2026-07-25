@@ -203,6 +203,73 @@ describe('MedicationsService', () => {
     });
   });
 
+  describe('getSchedule', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('reports a PENDING dose as due_now when local time is within 15 minutes of the scheduled slot', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T07:05:00.000Z')); // 8:05 AM in Africa/Lagos (UTC+1)
+
+      medicationRepo.find.mockResolvedValue([mockMedication]);
+      doseLogRepo.find.mockResolvedValue([
+        {
+          id: 'log-1',
+          medicationId: MEDICATION_ID,
+          patientId: PATIENT_ID,
+          doseDate: '2026-07-22',
+          scheduledTime: '8:00 AM',
+          status: DoseStatus.PENDING,
+        },
+      ]);
+
+      const result = await service.getSchedule(USER_ID);
+
+      expect(result.slots).toHaveLength(1);
+      expect(result.slots[0].doses[0].status).toBe(DoseStatus.DUE_NOW);
+    });
+
+    it('leaves a PENDING dose alone when local time is outside the 15 minute window', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T09:00:00.000Z')); // 10:00 AM in Africa/Lagos
+
+      medicationRepo.find.mockResolvedValue([mockMedication]);
+      doseLogRepo.find.mockResolvedValue([
+        {
+          id: 'log-1',
+          medicationId: MEDICATION_ID,
+          patientId: PATIENT_ID,
+          doseDate: '2026-07-22',
+          scheduledTime: '8:00 AM',
+          status: DoseStatus.PENDING,
+        },
+      ]);
+
+      const result = await service.getSchedule(USER_ID);
+
+      expect(result.slots[0].doses[0].status).toBe(DoseStatus.PENDING);
+    });
+
+    it('does not overlay due_now onto a dose that is already TAKEN', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T07:05:00.000Z')); // 8:05 AM in Africa/Lagos
+
+      medicationRepo.find.mockResolvedValue([mockMedication]);
+      doseLogRepo.find.mockResolvedValue([
+        {
+          id: 'log-1',
+          medicationId: MEDICATION_ID,
+          patientId: PATIENT_ID,
+          doseDate: '2026-07-22',
+          scheduledTime: '8:00 AM',
+          status: DoseStatus.TAKEN,
+        },
+      ]);
+
+      const result = await service.getSchedule(USER_ID);
+
+      expect(result.slots[0].doses[0].status).toBe(DoseStatus.TAKEN);
+    });
+  });
+
   describe('getRefillAlerts', () => {
     it('classifies medications by refill urgency and counts the rest as ok', async () => {
       const soon = new Date();

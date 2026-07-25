@@ -2,6 +2,13 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { MessagesController } from './messages.controller';
+import { MessagesService } from './messages.service';
+
+const mockMessagesService = {
+  send: jest.fn(),
+  getThread: jest.fn(),
+  markRead: jest.fn(),
+};
 
 describe('MessagesController', () => {
   let controller: MessagesController;
@@ -9,6 +16,7 @@ describe('MessagesController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [MessagesController],
+      providers: [{ provide: MessagesService, useValue: mockMessagesService }],
     }).compile();
     controller = module.get<MessagesController>(MessagesController);
   });

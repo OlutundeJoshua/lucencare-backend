@@ -19,5 +19,12 @@ export const STUDY_REJECTED_JOB = 'study_rejected';
 export const SEND_OTP_JOB = 'send_otp';
 export const SEND_RESET_PASSWORD_JOB = 'send_reset_password';
 export const SEND_PATIENT_CREDENTIALS_JOB = 'send_patient_credentials';
+export const MEDICATION_REMINDER_TICK_JOB = 'medication_reminder_tick';
+export const MEDICATION_REFILL_CHECK_JOB = 'medication_refill_check';
+export const SEND_MEDICATION_REMINDER_EMAIL_JOB = 'send_medication_reminder_email';
+export const SEND_APPOINTMENT_CONFIRMATION_JOB = 'send_appointment_confirmation';
+export const SEND_PATIENT_ONBOARDING_WELCOME_JOB = 'send_patient_onboarding_welcome';
 
 export const NOTIFICATION_FAN_OUT_BATCH_SIZE = 200;
+export const MEDICATION_REMINDER_TICK_CRON = '* * * * *';
+export const MEDICATION_REFILL_CHECK_CRON = '0 7 * * *';

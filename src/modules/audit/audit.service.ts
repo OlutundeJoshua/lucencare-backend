@@ -2,16 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { AuditLog } from './entities/audit-log.entity';
 import { AuditAction } from 'src/common/enums';
 
-export interface AuditLogParams {
-  actorId: string;
-  action: AuditAction;
-  resourceId: string;
-  resourceType: string;
-  metadata?: object;
-}
+import { AuditLog } from './entities/audit-log.entity';
+import { AuditLogParams } from './interfaces/audit-log-params.interface';
 
 @Injectable()
 export class AuditService {

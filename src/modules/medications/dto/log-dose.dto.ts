@@ -1,7 +1,7 @@
-import { IsEnum, IsISO8601, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsISO8601, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-import { DoseStatus } from 'src/common/enums';
+import { LOGGABLE_DOSE_STATUSES, LoggableDoseStatus } from 'src/common/enums';
 
 export class LogDoseDto {
   @ApiPropertyOptional({ description: 'ISO date (YYYY-MM-DD) — defaults to today' })
@@ -14,5 +14,7 @@ export class LogDoseDto {
   @IsNotEmpty()
   scheduledTime: string;
 
-  @ApiProperty({ enum: DoseStatus }) @IsEnum(DoseStatus) status: DoseStatus;
+  @ApiProperty({ enum: LOGGABLE_DOSE_STATUSES })
+  @IsIn(LOGGABLE_DOSE_STATUSES)
+  status: LoggableDoseStatus;
 }

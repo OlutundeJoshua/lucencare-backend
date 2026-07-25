@@ -35,11 +35,7 @@ import {
   LookupPatientDto,
   UpdatePatientDto,
 } from './dto/patient.dto';
-
-export interface PatientSummaryData {
-  patient: Patient;
-  careEvents: CareEvent[];
-}
+import { PatientSummaryData } from './interfaces/patient-summary-data.interface';
 
 @Injectable()
 export class PatientsService {

@@ -11,6 +11,7 @@ export default registerAs('app', () => ({
   redisHost: process.env.REDIS_HOST ?? 'localhost',
   redisPort: parseInt(process.env.REDIS_PORT ?? '6379', 10),
   redisPassword: process.env.REDIS_PASSWORD,
+  redisTls: (process.env.REDIS_TLS ?? 'false') === 'true',
 
   throttleTtl: parseInt(process.env.THROTTLE_TTL ?? '60', 10),
   throttleLimit: parseInt(process.env.THROTTLE_LIMIT ?? '60', 10),

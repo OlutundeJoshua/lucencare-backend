@@ -38,6 +38,7 @@ import { MailModule } from 'src/modules/mail/mail.module';
           host: configService.get<string>('app.redisHost', 'localhost'),
           port: configService.get<number>('app.redisPort', 6379),
           password: configService.get<string>('app.redisPassword'),
+          ...(configService.get<boolean>('app.redisTls') ? { tls: {} } : {}),
         },
       }),
       inject: [ConfigService],

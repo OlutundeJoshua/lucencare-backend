@@ -60,6 +60,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
           port: configService.get<number>('app.redisPort', 6379),
           password: configService.get<string>('app.redisPassword'),
           lazyConnect: true,
+          ...(configService.get<boolean>('app.redisTls') ? { tls: {} } : {}),
         }),
       inject: [ConfigService],
     },

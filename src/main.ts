@@ -31,9 +31,7 @@ async function bootstrap() {
   }
 
   app.enableCors({
-    origin: isProd
-      ? configService.get<string>('app.corsOrigin')
-      : ['http://localhost:4200', 'http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000'],
+    origin: isProd ? configService.get<string>('app.corsOrigin') : true,
     credentials: true,
   });
 

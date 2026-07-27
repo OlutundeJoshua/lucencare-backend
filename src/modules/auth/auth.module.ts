@@ -58,6 +58,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
         new Redis({
           host: configService.get<string>('app.redisHost', 'localhost'),
           port: configService.get<number>('app.redisPort', 6379),
+          username: configService.get<string>('app.redisUsername', 'default'),
           password: configService.get<string>('app.redisPassword'),
           lazyConnect: true,
           ...(configService.get<boolean>('app.redisTls') ? { tls: {} } : {}),

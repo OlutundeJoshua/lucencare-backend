@@ -10,6 +10,7 @@ export default registerAs('app', () => ({
 
   redisHost: process.env.REDIS_HOST ?? 'localhost',
   redisPort: parseInt(process.env.REDIS_PORT ?? '6379', 10),
+  redisUsername: process.env.REDIS_USERNAME ?? 'default',
   redisPassword: process.env.REDIS_PASSWORD,
   redisTls: (process.env.REDIS_TLS ?? 'false') === 'true',
 

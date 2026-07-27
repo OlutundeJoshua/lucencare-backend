@@ -4,7 +4,7 @@ export class AddDueNowToDoseStatusEnum1784679078587 implements MigrationInterfac
     name = 'AddDueNowToDoseStatusEnum1784679078587'
 
     public async up(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(`ALTER TYPE "public"."medication_dose_logs_status_enum" ADD VALUE 'due_now'`);
+        await queryRunner.query(`ALTER TYPE "public"."medication_dose_logs_status_enum" ADD VALUE IF NOT EXISTS 'due_now'`);
     }
 
     public async down(queryRunner: QueryRunner): Promise<void> {

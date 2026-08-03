@@ -1,8 +1,11 @@
 import * as path from 'path';
 import { DataSourceOptions } from 'typeorm';
 
+import { TypeOrmQueryLogger } from './typeorm-query.logger';
+
 export function buildDatabaseOptions(): DataSourceOptions {
   const src = path.resolve(__dirname, '..');
+  const isDev = process.env.NODE_ENV !== 'production';
 
   return {
     type: 'postgres',
@@ -14,7 +17,11 @@ export function buildDatabaseOptions(): DataSourceOptions {
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
     synchronize:
       process.env.NODE_ENV !== 'production' && process.env.DB_SYNC !== 'false',
-    logging: process.env.NODE_ENV === 'development',
+    // TypeORM ignores the `logging` option once a custom `logger` instance is set —
+    // TypeOrmQueryLogger does its own filtering (DB_LOG_QUERIES) instead.
+    logging: isDev,
+    logger: new TypeOrmQueryLogger(),
+    maxQueryExecutionTime: 200,
     entities: [path.join(src, '**/*.entity{.ts,.js}')],
     migrations: [path.join(src, 'database/migrations/*{.ts,.js}')],
     subscribers: [path.join(src, 'common/subscribers/*.subscriber{.ts,.js}')],

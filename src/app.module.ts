@@ -47,6 +47,19 @@ import { HealthModule } from './health/health.module';
         autoLogging: true,
         redact: ['req.headers.authorization', 'req.body.password'],
         level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
+        transport:
+          process.env.NODE_ENV === 'production'
+            ? undefined
+            : {
+                target: 'pino-pretty',
+                options: {
+                  colorize: true,
+                  singleLine: true,
+                  translateTime: 'SYS:HH:MM:ss.l',
+                  ignore: 'pid,hostname,req.headers,res.headers',
+                  messageFormat: '{context} {msg}',
+                },
+              },
       },
     }),
 

@@ -6,13 +6,14 @@ import {
   ORG_VERIFICATION_JOB,
   PROGRAM_REVIEW_JOB,
   STUDY_REVIEW_JOB,
+  WORKER_POLL_OPTIONS,
 } from 'src/queues/queues.constants';
 
 import { OrgVerificationProcessor } from './org-verification.processor';
 import { ProgramReviewProcessor } from './program-review.processor';
 import { StudyReviewProcessor } from './study-review.processor';
 
-@Processor(ADMIN_QUEUE)
+@Processor(ADMIN_QUEUE, WORKER_POLL_OPTIONS)
 export class AdminQueueProcessor extends WorkerHost {
   constructor(
     private readonly orgVerificationProcessor: OrgVerificationProcessor,

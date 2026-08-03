@@ -10,6 +10,7 @@ import {
   NOTIFICATIONS_QUEUE,
   PROGRAM_APPROVED_JOB,
   STUDY_APPROVED_JOB,
+  WORKER_POLL_OPTIONS,
 } from 'src/queues/queues.constants';
 
 import { BatchNotifyProcessor } from './batch-notify.processor';
@@ -20,7 +21,7 @@ import { MedicationReminderTickProcessor } from './medication-reminder-tick.proc
 import { ProgramApprovedProcessor } from './program-approved.processor';
 import { StudyApprovedProcessor } from './study-approved.processor';
 
-@Processor(NOTIFICATIONS_QUEUE)
+@Processor(NOTIFICATIONS_QUEUE, WORKER_POLL_OPTIONS)
 export class NotificationsQueueProcessor extends WorkerHost {
   constructor(
     private readonly fanOutNotifyProcessor: FanOutNotifyProcessor,

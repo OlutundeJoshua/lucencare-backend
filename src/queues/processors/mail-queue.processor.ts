@@ -9,6 +9,7 @@ import {
   SEND_PATIENT_CREDENTIALS_JOB,
   SEND_PATIENT_ONBOARDING_WELCOME_JOB,
   SEND_RESET_PASSWORD_JOB,
+  WORKER_POLL_OPTIONS,
 } from 'src/queues/queues.constants';
 
 import { SendAppointmentConfirmationProcessor } from './send-appointment-confirmation.processor';
@@ -18,7 +19,7 @@ import { SendPatientCredentialsProcessor } from './send-patient-credentials.proc
 import { SendPatientOnboardingWelcomeProcessor } from './send-patient-onboarding-welcome.processor';
 import { SendResetPasswordProcessor } from './send-reset-password.processor';
 
-@Processor(MAIL_QUEUE)
+@Processor(MAIL_QUEUE, WORKER_POLL_OPTIONS)
 export class MailQueueProcessor extends WorkerHost {
   constructor(
     private readonly sendOtpProcessor: SendOtpProcessor,

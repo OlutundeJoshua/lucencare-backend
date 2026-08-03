@@ -26,6 +26,8 @@ export default registerAs('app', () => ({
   otpTtlSeconds: parseInt(process.env.OTP_TTL_SECONDS ?? '300', 10),
   bcryptSaltRounds: parseInt(process.env.BCRYPT_SALT_ROUNDS ?? '12', 10),
 
+  medicationReminderTickCron: process.env.MEDICATION_REMINDER_TICK_CRON ?? '*/30 * * * *',
+
   s3Endpoint: process.env.S3_ENDPOINT,
   s3Region: process.env.S3_REGION ?? 'us-east-1',
   s3Bucket: process.env.S3_BUCKET ?? 'lucencare-exports',

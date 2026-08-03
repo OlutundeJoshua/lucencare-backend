@@ -4,7 +4,12 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
 
-import { NOTIFICATIONS_QUEUE, ADMIN_QUEUE, MAIL_QUEUE } from './queues.constants';
+import {
+  NOTIFICATIONS_QUEUE,
+  ADMIN_QUEUE,
+  MAIL_QUEUE,
+  QUEUE_DEFAULT_JOB_OPTIONS,
+} from './queues.constants';
 
 import { FanOutNotifyProcessor } from './processors/fan-out-notify.processor';
 import { BatchNotifyProcessor } from './processors/batch-notify.processor';
@@ -45,9 +50,9 @@ import { MailModule } from 'src/modules/mail/mail.module';
       inject: [ConfigService],
     }),
     BullModule.registerQueue(
-      { name: NOTIFICATIONS_QUEUE },
-      { name: ADMIN_QUEUE },
-      { name: MAIL_QUEUE },
+      { name: NOTIFICATIONS_QUEUE, defaultJobOptions: QUEUE_DEFAULT_JOB_OPTIONS },
+      { name: ADMIN_QUEUE, defaultJobOptions: QUEUE_DEFAULT_JOB_OPTIONS },
+      { name: MAIL_QUEUE, defaultJobOptions: QUEUE_DEFAULT_JOB_OPTIONS },
     ),
     MedicationsModule,
     NotificationsModule,

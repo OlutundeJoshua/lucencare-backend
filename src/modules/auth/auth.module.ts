@@ -2,16 +2,15 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 
-import { ADMIN_QUEUE, MAIL_QUEUE } from 'src/queues/queues.constants';
 import { AuditModule } from 'src/modules/audit/audit.module';
 import { PatientsModule } from 'src/modules/patients/patients.module';
 import { OrganizationsModule } from 'src/modules/organizations/organizations.module';
 import { ConsentsModule } from 'src/modules/consents/consents.module';
 import { ApplicationsModule } from 'src/modules/applications/applications.module';
+import { QueuesModule } from 'src/queues/queues.module';
 
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -36,7 +35,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       inject: [ConfigService],
     }),
 
-    BullModule.registerQueue({ name: MAIL_QUEUE }, { name: ADMIN_QUEUE }),
+    QueuesModule,
 
     // These modules are imported so their entities are registered with TypeORM autoLoadEntities.
     // AuthService uses DataSource.transaction() with manager.getRepository() for atomic

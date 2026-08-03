@@ -26,5 +26,20 @@ export const SEND_APPOINTMENT_CONFIRMATION_JOB = 'send_appointment_confirmation'
 export const SEND_PATIENT_ONBOARDING_WELCOME_JOB = 'send_patient_onboarding_welcome';
 
 export const NOTIFICATION_FAN_OUT_BATCH_SIZE = 200;
-export const MEDICATION_REMINDER_TICK_CRON = '* * * * *';
 export const MEDICATION_REFILL_CHECK_CRON = '0 7 * * *';
+
+// Queue producer defaults: drop completed/failed job records instead of letting
+// them accumulate in Redis forever (bounded by removeOnFail so recent failures
+// stay inspectable).
+export const QUEUE_DEFAULT_JOB_OPTIONS = {
+  removeOnComplete: true,
+  removeOnFail: 1000,
+};
+
+// Worker polling defaults, raised from BullMQ's defaults (stalledInterval 30_000ms,
+// drainDelay 5s) to cut idle Redis command volume on a command-metered plan.
+// Stalled-job recovery stays enabled — just checked less often.
+export const WORKER_POLL_OPTIONS = {
+  stalledInterval: 90_000,
+  drainDelay: 20,
+};

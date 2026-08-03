@@ -1,10 +1,10 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Job, Queue } from 'bullmq';
 
 import {
   MAIL_QUEUE,
-  MEDICATION_REMINDER_TICK_CRON,
   MEDICATION_REMINDER_TICK_JOB,
   NOTIFICATIONS_QUEUE,
   NOTIFICATION_FAN_OUT_BATCH_SIZE,
@@ -16,15 +16,20 @@ import { MedicationsService } from 'src/modules/medications/medications.service'
 export class MedicationReminderTickProcessor implements OnModuleInit {
   constructor(
     private readonly medicationsService: MedicationsService,
+    private readonly configService: ConfigService,
     @InjectQueue(NOTIFICATIONS_QUEUE) private readonly notificationsQueue: Queue,
     @InjectQueue(MAIL_QUEUE) private readonly mailQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
+    const pattern = this.configService.get<string>(
+      'app.medicationReminderTickCron',
+      '*/30 * * * *',
+    );
     await this.notificationsQueue.add(
       MEDICATION_REMINDER_TICK_JOB,
       {},
-      { repeat: { pattern: MEDICATION_REMINDER_TICK_CRON }, jobId: MEDICATION_REMINDER_TICK_JOB },
+      { repeat: { pattern }, jobId: MEDICATION_REMINDER_TICK_JOB },
     );
   }
 

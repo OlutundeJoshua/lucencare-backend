@@ -6,8 +6,10 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -55,14 +57,20 @@ export class BenefactorOnboardingDto {
   codeOfConductConsent: true;
 }
 
+export class UpdateProfessionalBioDto {
+  @ApiProperty({ minLength: 10 }) @IsString() @MinLength(10) @MaxLength(2000) bio: string;
+}
+
 export class ReviewApplicationDto {
   @ApiProperty({ enum: ['approve', 'reject'] })
   @IsIn(['approve', 'reject'])
   action: 'approve' | 'reject';
 
   @ApiPropertyOptional({ description: 'Required when action is reject' })
-  @IsOptional()
+  @ValidateIf((o: ReviewApplicationDto) => o.action === 'reject')
+  @IsNotEmpty()
   @IsString()
+  @MaxLength(1000)
   reason?: string;
 }
 

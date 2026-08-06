@@ -1,9 +1,11 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { DataSource } from 'typeorm';
 
 import { AuditAction, OrgStatus, ProgramStatus, StudyStatus } from 'src/common/enums';
 import { AuditService } from 'src/modules/audit/audit.service';
+import { User } from 'src/modules/auth/entities/user.entity';
 import { Organization } from 'src/modules/organizations/entities/organization.entity';
 import { OrganizationsService } from 'src/modules/organizations/organizations.service';
 import { Program } from 'src/modules/programs/entities/program.entity';
@@ -32,6 +34,7 @@ export class AdminService {
     private readonly matchingService: MatchingService,
     private readonly auditService: AuditService,
     @InjectQueue(ADMIN_QUEUE) private readonly adminQueue: Queue,
+    private readonly dataSource: DataSource,
   ) {}
 
   async reviewOrganization(orgId: string, adminUserId: string, dto: AdminApproveDto): Promise<Organization> {
@@ -42,10 +45,28 @@ export class AdminService {
       throw new ConflictException('Organization is not in a reviewable state');
     }
 
-    const newStatus = dto.status === 'approved' ? OrgStatus.ACTIVE : OrgStatus.REJECTED;
-    await this.orgsService.updateStatus(orgId, newStatus, adminUserId);
+    const approved = dto.status === 'approved';
+    const newStatus = approved ? OrgStatus.ACTIVE : OrgStatus.REJECTED;
 
-    const auditAction = dto.status === 'approved' ? AuditAction.ADMIN_APPROVE : AuditAction.ADMIN_REJECT;
+    await this.dataSource.transaction(async (manager) => {
+      await manager.getRepository(Organization).update(
+        { id: orgId },
+        {
+          status: newStatus,
+          rejectionReason: approved ? undefined : dto.reason,
+          verifiedAt: approved ? new Date() : undefined,
+          verifiedBy: approved ? adminUserId : undefined,
+        },
+      );
+
+      // Parity with the professional/benefactor review path: approval activates
+      // the staff account, otherwise NGO/HMO users stay 'pending' forever.
+      if (approved) {
+        await manager.getRepository(User).update({ orgId }, { status: 'active' });
+      }
+    });
+
+    const auditAction = approved ? AuditAction.ADMIN_APPROVE : AuditAction.ADMIN_REJECT;
     await this.auditService.log({
       actorId: adminUserId,
       action: auditAction,
@@ -54,16 +75,22 @@ export class AdminService {
       metadata: dto.reason ? { reason: dto.reason } : undefined,
     });
 
-    if (dto.status === 'approved') {
+    // org.createdBy is null for orgs created during unauthenticated signup — the
+    // EntityActorSubscriber has no CLS userId to read. Resolve the staff user by orgId.
+    const staffUser = await this.dataSource
+      .getRepository(User)
+      .findOne({ where: { orgId }, select: ['id'] });
+
+    if (approved) {
       await this.adminQueue.add(ORG_VERIFIED_JOB, {
         orgId: org.id,
-        creatorUserId: org.createdBy,
+        creatorUserId: staffUser?.id ?? org.createdBy,
         orgName: org.name,
       });
     } else {
       await this.adminQueue.add(ORG_REJECTED_JOB, {
         orgId: org.id,
-        creatorUserId: org.createdBy,
+        creatorUserId: staffUser?.id ?? org.createdBy,
         reason: dto.reason,
       });
     }

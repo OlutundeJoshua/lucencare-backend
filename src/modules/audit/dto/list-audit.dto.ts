@@ -2,29 +2,29 @@ import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
-import { OrgStatus, OrgType } from 'src/common/enums';
+import { AuditAction } from 'src/common/enums';
 
-export class ListOrganizationsDto {
-  @ApiPropertyOptional({ enum: OrgStatus, description: 'Filter by org status' })
+export class ListAuditDto {
+  @ApiPropertyOptional({ enum: AuditAction, description: 'Filter by action' })
   @IsOptional()
-  @IsEnum(OrgStatus)
-  status?: OrgStatus;
+  @IsEnum(AuditAction)
+  action?: AuditAction;
 
-  @ApiPropertyOptional({ enum: OrgType, description: 'Filter by org type' })
+  @ApiPropertyOptional({ description: 'Filter by resource type, e.g. "organization"' })
   @IsOptional()
-  @IsEnum(OrgType)
-  type?: OrgType;
+  @IsString()
+  resourceType?: string;
 
   @ApiPropertyOptional({ description: 'ULID cursor for keyset pagination' })
   @IsOptional()
   @IsString()
   cursor?: string;
 
-  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 50 })
+  @ApiPropertyOptional({ default: 50, minimum: 1, maximum: 100 })
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(50)
+  @Max(100)
   @Type(() => Number)
   limit?: number;
 }

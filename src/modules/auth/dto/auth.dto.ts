@@ -17,6 +17,7 @@ import {
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 import { ConsentPurpose, Gender, OrgType, UserRole } from 'src/common/enums';
+import { LOGIN_CLIENT_ROLES, SIGNUP_CLIENT_ROLES } from 'src/common/constants/client-roles';
 
 export class RegisterPatientDto {
   @ApiProperty() @IsEmail() email: string;
@@ -83,6 +84,15 @@ export class LoginDto {
   @ApiProperty() @IsEmail() email: string;
 
   @ApiProperty() @IsString() @IsNotEmpty() password: string;
+
+  // Part of the credential, not a hint: an account may only sign in from the
+  // portal matching its own role. See AuthService.login.
+  @ApiProperty({
+    enum: LOGIN_CLIENT_ROLES,
+    description: 'Portal the user is signing in from',
+  })
+  @IsIn(LOGIN_CLIENT_ROLES)
+  role: string;
 }
 
 export class RequestOtpDto {
@@ -111,8 +121,8 @@ export class SignupDto {
 
   @ApiProperty({ minLength: 8 }) @IsString() @MinLength(8) password: string;
 
-  @ApiProperty({ enum: ['patient', 'ngo', 'hmo', 'professional', 'benefactor'] })
-  @IsIn(['patient', 'ngo', 'hmo', 'professional', 'benefactor'])
+  @ApiProperty({ enum: SIGNUP_CLIENT_ROLES })
+  @IsIn(SIGNUP_CLIENT_ROLES)
   role: string;
 }
 
@@ -150,6 +160,16 @@ export class NgoOnboardingDto {
   @ApiProperty() @IsString() @IsNotEmpty() orgName: string;
 
   @ApiProperty() @IsString() @IsNotEmpty() registrationNumber: string;
+
+  @ApiProperty({ description: 'Tax Identification Number' })
+  @IsString()
+  @IsNotEmpty()
+  tin: string;
+
+  @ApiProperty({ description: 'SCUML certificate number' })
+  @IsString()
+  @IsNotEmpty()
+  scumlNumber: string;
 
   @ApiProperty() @IsString() @IsNotEmpty() focusAreas: string;
 

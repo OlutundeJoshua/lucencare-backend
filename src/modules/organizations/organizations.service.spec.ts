@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { EntityManager } from 'typeorm';
 
 import { OrgStatus, OrgType } from 'src/common/enums';
+import { User } from 'src/modules/auth/entities/user.entity';
 
 import { ListOrganizationsDto } from './dto/list-organizations.dto';
 import { Organization } from './entities/organization.entity';
@@ -37,6 +38,18 @@ const mockRepo = {
   createQueryBuilder: jest.fn(() => mockQueryBuilder),
 };
 
+// findAll enriches each org with its staff user's name (contactPerson).
+const mockUserQueryBuilder = {
+  select: jest.fn().mockReturnThis(),
+  where: jest.fn().mockReturnThis(),
+  getMany: jest.fn().mockResolvedValue([]),
+};
+
+const mockUserRepo = {
+  find: jest.fn(),
+  createQueryBuilder: jest.fn(() => mockUserQueryBuilder),
+};
+
 describe('OrganizationsService', () => {
   let service: OrganizationsService;
 
@@ -45,6 +58,7 @@ describe('OrganizationsService', () => {
       providers: [
         OrganizationsService,
         { provide: getRepositoryToken(Organization), useValue: mockRepo },
+        { provide: getRepositoryToken(User), useValue: mockUserRepo },
       ],
     }).compile();
 
@@ -55,6 +69,10 @@ describe('OrganizationsService', () => {
     mockQueryBuilder.andWhere.mockReturnThis();
     mockQueryBuilder.orderBy.mockReturnThis();
     mockQueryBuilder.take.mockReturnThis();
+    mockUserRepo.createQueryBuilder.mockReturnValue(mockUserQueryBuilder);
+    mockUserQueryBuilder.select.mockReturnThis();
+    mockUserQueryBuilder.where.mockReturnThis();
+    mockUserQueryBuilder.getMany.mockResolvedValue([]);
   });
 
   // ---------------------------------------------------------------------------

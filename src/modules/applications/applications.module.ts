@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditModule } from 'src/modules/audit/audit.module';
 import { User } from 'src/modules/auth/entities/user.entity';
 
+import { ApplicationsController } from './applications.controller';
 import { ApplicationsService } from './applications.service';
 import { ProfessionalApplication } from './entities/professional-application.entity';
 import { BenefactorApplication } from './entities/benefactor-application.entity';
@@ -13,6 +14,7 @@ import { BenefactorApplication } from './entities/benefactor-application.entity'
     TypeOrmModule.forFeature([ProfessionalApplication, BenefactorApplication, User]),
     AuditModule,
   ],
+  controllers: [ApplicationsController],
   providers: [ApplicationsService],
   exports: [ApplicationsService],
 })

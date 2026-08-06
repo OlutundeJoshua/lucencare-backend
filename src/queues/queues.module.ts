@@ -2,7 +2,10 @@
 
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+
+import { User } from 'src/modules/auth/entities/user.entity';
 
 import {
   NOTIFICATIONS_QUEUE,
@@ -54,6 +57,8 @@ import { MailModule } from 'src/modules/mail/mail.module';
       { name: ADMIN_QUEUE, defaultJobOptions: QUEUE_DEFAULT_JOB_OPTIONS },
       { name: MAIL_QUEUE, defaultJobOptions: QUEUE_DEFAULT_JOB_OPTIONS },
     ),
+    // OrgVerificationProcessor resolves the platform-admin recipient list.
+    TypeOrmModule.forFeature([User]),
     MedicationsModule,
     NotificationsModule,
     MailModule,

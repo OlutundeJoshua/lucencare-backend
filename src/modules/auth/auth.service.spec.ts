@@ -18,6 +18,8 @@ import {
   SEND_RESET_PASSWORD_JOB,
 } from 'src/queues/queues.constants';
 import { AuditService } from 'src/modules/audit/audit.service';
+import { ApplicationsService } from 'src/modules/applications/applications.service';
+import { OrganizationsService } from 'src/modules/organizations/organizations.service';
 
 import { AuthService } from './auth.service';
 import { User } from './entities/user.entity';
@@ -100,6 +102,8 @@ describe('AuthService', () => {
   let mockConfig: ReturnType<typeof makeMockConfig>;
   let mockAudit: { log: jest.Mock };
   let mockDataSource: { transaction: jest.Mock; getRepository: jest.Mock };
+  let mockApplications: { getProfessionalByUser: jest.Mock; getBenefactorByUser: jest.Mock };
+  let mockOrganizations: { findOne: jest.Mock };
 
   beforeEach(async () => {
     userRepo = makeMockRepo();
@@ -110,6 +114,11 @@ describe('AuthService', () => {
     mockConfig = makeMockConfig();
     mockAudit = { log: jest.fn() };
     mockDataSource = { transaction: jest.fn(), getRepository: jest.fn() };
+    mockApplications = {
+      getProfessionalByUser: jest.fn().mockResolvedValue(null),
+      getBenefactorByUser: jest.fn().mockResolvedValue(null),
+    };
+    mockOrganizations = { findOne: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -122,6 +131,8 @@ describe('AuthService', () => {
         { provide: getQueueToken(MAIL_QUEUE), useValue: mockMailQueue },
         { provide: getQueueToken(ADMIN_QUEUE), useValue: mockAdminQueue },
         { provide: AuditService, useValue: mockAudit },
+        { provide: ApplicationsService, useValue: mockApplications },
+        { provide: OrganizationsService, useValue: mockOrganizations },
       ],
     }).compile();
 
@@ -348,7 +359,11 @@ describe('AuthService', () => {
       // login resolves display name via dataSource.getRepository(Patient) for PATIENT users
       mockDataSource.getRepository.mockReturnValue({ findOne: jest.fn().mockResolvedValue(null) });
 
-      const result = await service.login({ email: user.email, password: 'correctpassword' });
+      const result = await service.login({
+        email: user.email,
+        password: 'correctpassword',
+        role: 'patient',
+      });
 
       expect(mockAudit.log).toHaveBeenCalledWith(expect.objectContaining({ action: AuditAction.LOGIN }));
       expect(result.accessToken).toBeDefined();
@@ -357,27 +372,146 @@ describe('AuthService', () => {
     it('throws 401 with generic message when email not found', async () => {
       userRepo.findOne.mockResolvedValue(null);
 
-      await expect(service.login({ email: 'nobody@example.com', password: 'any' })).rejects.toThrow(
-        UnauthorizedException,
-      );
+      await expect(
+        service.login({ email: 'nobody@example.com', password: 'any', role: 'patient' }),
+      ).rejects.toThrow(UnauthorizedException);
     });
 
     it('throws 401 with generic message when password is wrong', async () => {
       const hash = await bcrypt.hash('correctpassword', 1);
       userRepo.findOne.mockResolvedValue(makeUser({ passwordHash: hash }));
 
-      await expect(service.login({ email: 'test@example.com', password: 'wrongpassword' })).rejects.toThrow(
-        UnauthorizedException,
-      );
+      await expect(
+        service.login({ email: 'test@example.com', password: 'wrongpassword', role: 'patient' }),
+      ).rejects.toThrow(UnauthorizedException);
     });
 
     it('throws 403 when user is suspended', async () => {
       const hash = await bcrypt.hash('password123', 1);
       userRepo.findOne.mockResolvedValue(makeUser({ passwordHash: hash, status: 'suspended' }));
 
-      await expect(service.login({ email: 'test@example.com', password: 'password123' })).rejects.toThrow(
-        ForbiddenException,
+      await expect(
+        service.login({ email: 'test@example.com', password: 'password123', role: 'patient' }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    // --- portal / role scoping ---
+
+    // Every client role must resolve to its own internal UserRole. 'ngo' -> 'ngo_admin',
+    // 'hmo' -> 'hmo_coordinator' and 'admin' -> 'platform_admin' are the non-identity
+    // mappings that a hand-written check would get wrong.
+    it.each([
+      ['patient', UserRole.PATIENT],
+      ['ngo', UserRole.NGO_ADMIN],
+      ['hmo', UserRole.HMO_COORDINATOR],
+      ['professional', UserRole.PROFESSIONAL],
+      ['benefactor', UserRole.BENEFACTOR],
+      ['admin', UserRole.PLATFORM_ADMIN],
+      ['researcher', UserRole.RESEARCHER],
+    ])('signs in a %s account from its own portal', async (clientRole, internalRole) => {
+      const hash = await bcrypt.hash('password123', 1);
+      userRepo.findOne.mockResolvedValue(
+        makeUser({ passwordHash: hash, status: 'active', role: internalRole }),
       );
+      mockDataSource.getRepository.mockReturnValue({ findOne: jest.fn().mockResolvedValue(null) });
+
+      const result = await service.login({
+        email: 'test@example.com',
+        password: 'password123',
+        role: clientRole,
+      });
+
+      expect(result.accessToken).toBeDefined();
+      expect(result.user.role).toBe(clientRole);
+    });
+
+    it('throws 401 when a patient signs in from the NGO portal', async () => {
+      const hash = await bcrypt.hash('password123', 1);
+      userRepo.findOne.mockResolvedValue(
+        makeUser({ passwordHash: hash, status: 'active', role: UserRole.PATIENT }),
+      );
+
+      await expect(
+        service.login({ email: 'test@example.com', password: 'password123', role: 'ngo' }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(mockAudit.log).not.toHaveBeenCalled();
+    });
+
+    it('throws 401 when an NGO admin signs in from the HMO portal', async () => {
+      const hash = await bcrypt.hash('password123', 1);
+      userRepo.findOne.mockResolvedValue(
+        makeUser({ passwordHash: hash, status: 'active', role: UserRole.NGO_ADMIN }),
+      );
+
+      await expect(
+        service.login({ email: 'test@example.com', password: 'password123', role: 'hmo' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    // Guards the ordering in login(): the role check must run BEFORE the suspended
+    // check, otherwise a wrong-portal probe against a suspended account returns a
+    // distinguishable 403 and confirms both that the account exists and that it is
+    // suspended.
+    it('throws 401, not 403, when a suspended account is probed from the wrong portal', async () => {
+      const hash = await bcrypt.hash('password123', 1);
+      userRepo.findOne.mockResolvedValue(
+        makeUser({ passwordHash: hash, status: 'suspended', role: UserRole.PATIENT }),
+      );
+
+      await expect(
+        service.login({ email: 'test@example.com', password: 'password123', role: 'ngo' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('still throws 403 when a suspended account uses its correct portal', async () => {
+      const hash = await bcrypt.hash('password123', 1);
+      userRepo.findOne.mockResolvedValue(
+        makeUser({ passwordHash: hash, status: 'suspended', role: UserRole.PATIENT }),
+      );
+
+      await expect(
+        service.login({ email: 'test@example.com', password: 'password123', role: 'patient' }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    // BR-8: a wrong portal must be indistinguishable from a wrong password.
+    it('returns an identical message for a wrong portal, a wrong password and an unknown email', async () => {
+      const hash = await bcrypt.hash('password123', 1);
+      const user = makeUser({ passwordHash: hash, status: 'active', role: UserRole.PATIENT });
+
+      const messageFor = async (dto: { email: string; password: string; role: string }) => {
+        try {
+          await service.login(dto);
+          throw new Error('expected login to reject');
+        } catch (e) {
+          return (e as Error).message;
+        }
+      };
+
+      userRepo.findOne.mockResolvedValue(user);
+      const wrongPortal = await messageFor({
+        email: 'test@example.com',
+        password: 'password123',
+        role: 'ngo',
+      });
+
+      userRepo.findOne.mockResolvedValue(user);
+      const wrongPassword = await messageFor({
+        email: 'test@example.com',
+        password: 'nope',
+        role: 'patient',
+      });
+
+      userRepo.findOne.mockResolvedValue(null);
+      const unknownEmail = await messageFor({
+        email: 'nobody@example.com',
+        password: 'password123',
+        role: 'patient',
+      });
+
+      expect(wrongPortal).toBe('Invalid credentials');
+      expect(wrongPassword).toBe(wrongPortal);
+      expect(unknownEmail).toBe(wrongPortal);
     });
   });
 
@@ -418,6 +552,31 @@ describe('AuthService', () => {
       mockRedis.get.mockResolvedValue('1');
 
       await expect(service.refreshTokens('old.refresh.token')).rejects.toThrow(UnauthorizedException);
+    });
+
+    // Without this a suspended user could rotate tokens forever, since status was
+    // otherwise only ever checked at login.
+    it('throws 403 for a suspended account', async () => {
+      mockJwt.verify.mockReturnValue(validPayload);
+      mockRedis.get.mockResolvedValue(null);
+      userRepo.findOne.mockResolvedValue(makeUser({ status: 'suspended' }));
+
+      await expect(service.refreshTokens('old.refresh.token')).rejects.toThrow(ForbiddenException);
+      expect(mockRedis.set).not.toHaveBeenCalled();
+    });
+
+    // A pending user holds a valid session — they still need /auth/me and the
+    // onboarding routes, both marked @AllowPending().
+    it('still issues tokens for a pending account', async () => {
+      mockJwt.verify.mockReturnValue(validPayload);
+      mockRedis.get.mockResolvedValue(null);
+      userRepo.findOne.mockResolvedValue(makeUser({ status: 'pending', role: UserRole.NGO_ADMIN }));
+      mockRedis.set.mockResolvedValue('OK');
+      mockDataSource.getRepository.mockReturnValue({ findOne: jest.fn().mockResolvedValue(null) });
+
+      const result = await service.refreshTokens('old.refresh.token');
+
+      expect(result.accessToken).toBeDefined();
     });
   });
 
@@ -582,6 +741,183 @@ describe('AuthService', () => {
         'constraint violation',
       );
       expect(mockMailQueue.add).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('signupLite', () => {
+    function arrangeSignup() {
+      const { manager, userRepo: txUserRepo, orgRepo, patientRepo } = makeTransactionManager();
+      txUserRepo.findOne.mockResolvedValue(null);
+      txUserRepo.create.mockImplementation((data: object) => ({ id: 'USER01234567890123456789', ...data }));
+      txUserRepo.save.mockImplementation((u: object) => Promise.resolve(u));
+      txUserRepo.update.mockResolvedValue({ affected: 1 });
+      orgRepo.create.mockImplementation((data: object) => ({ id: 'ORG012345678901234567890', ...data }));
+      orgRepo.save.mockImplementation((o: object) => Promise.resolve(o));
+      patientRepo.create.mockImplementation((data: object) => data);
+      patientRepo.save.mockResolvedValue({});
+
+      mockDataSource.transaction.mockImplementation(async (fn: (m: typeof manager) => Promise<unknown>) =>
+        fn(manager as never),
+      );
+
+      return { txUserRepo, orgRepo };
+    }
+
+    // users.name is the only place a professional's or benefactor's name is kept —
+    // neither application table has a name column of its own.
+    it.each([
+      ['professional', UserRole.PROFESSIONAL],
+      ['benefactor', UserRole.BENEFACTOR],
+      ['ngo', UserRole.NGO_ADMIN],
+    ])('persists the signup name on the user row for role %s', async (role, expectedRole) => {
+      const { txUserRepo } = arrangeSignup();
+
+      await service.signupLite({
+        name: 'Dr Ada Okafor',
+        email: 'ada@example.com',
+        password: 'password123',
+        role,
+      });
+
+      expect(txUserRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Dr Ada Okafor', role: expectedRole, status: 'pending' }),
+      );
+    });
+
+    it('returns the name on the auth payload', async () => {
+      arrangeSignup();
+
+      const payload = await service.signupLite({
+        name: 'Hope Health Initiative',
+        email: 'admin@hopehealth.org',
+        password: 'password123',
+        role: 'ngo',
+      });
+
+      expect(payload.user.name).toBe('Hope Health Initiative');
+      expect(payload.user.role).toBe('ngo');
+    });
+  });
+
+  describe('completeNgoOnboarding', () => {
+    const orgId = 'ORG012345678901234567890';
+    const USER_ID = 'USER01234567890123456789';
+    const dto = {
+      orgName: 'Hope Health Initiative',
+      registrationNumber: 'RC-123456',
+      tin: '01234567-0001',
+      scumlNumber: 'SCUML-998877',
+      focusAreas: 'Maternal health, Diabetes',
+      website: 'https://hopehealth.org',
+      operatingRegions: 'Lagos, Ogun',
+      headOfficeCountry: 'NG',
+      programDescription: 'Community outreach and subsidised care.',
+      termsConsent: true as const,
+      dataProcessingConsent: true as const,
+    };
+
+    it('persists every submitted field, including tin, scumlNumber and consent timestamps', async () => {
+      const orgRepo = makeMockRepo();
+      orgRepo.findOne.mockResolvedValue({ id: orgId, contactEmail: 'admin@hopehealth.org' });
+      orgRepo.update.mockResolvedValue({ affected: 1 });
+      mockDataSource.getRepository.mockReturnValue(orgRepo);
+
+      await service.completeNgoOnboarding(orgId, dto, USER_ID);
+
+      expect(orgRepo.update).toHaveBeenCalledWith(
+        { id: orgId },
+        expect.objectContaining({
+          name: dto.orgName,
+          registrationNumber: dto.registrationNumber,
+          tin: dto.tin,
+          scumlNumber: dto.scumlNumber,
+          focusAreas: dto.focusAreas,
+          website: dto.website,
+          operatingRegions: dto.operatingRegions,
+          headOfficeCountry: dto.headOfficeCountry,
+          programDescription: dto.programDescription,
+          termsConsentAt: expect.any(Date),
+          dataProcessingConsentAt: expect.any(Date),
+        }),
+      );
+      expect(mockAdminQueue.add).toHaveBeenCalledWith(
+        ORG_VERIFICATION_JOB,
+        expect.objectContaining({ orgId, orgName: dto.orgName }),
+      );
+    });
+
+    it('throws 409 when the organisation does not exist', async () => {
+      const orgRepo = makeMockRepo();
+      orgRepo.findOne.mockResolvedValue(null);
+      mockDataSource.getRepository.mockReturnValue(orgRepo);
+
+      await expect(service.completeNgoOnboarding(orgId, dto, USER_ID)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(mockAdminQueue.add).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getMe', () => {
+    const userId = 'USER01234567890123456789';
+
+    it('returns live status from the DB, not from the token', async () => {
+      userRepo.findOne.mockResolvedValue(
+        makeUser({ id: userId, role: UserRole.PROFESSIONAL, status: 'active', name: 'Dr Ada' }),
+      );
+      mockApplications.getProfessionalByUser.mockResolvedValue({ id: 'APP1', status: 'approved' });
+
+      const me = await service.getMe(userId);
+
+      expect(me).toEqual(
+        expect.objectContaining({
+          id: userId,
+          name: 'Dr Ada',
+          role: 'professional',
+          status: 'active',
+          application: { id: 'APP1', status: 'approved' },
+        }),
+      );
+      expect(mockApplications.getBenefactorByUser).not.toHaveBeenCalled();
+    });
+
+    it('attaches the benefactor application for benefactor users', async () => {
+      userRepo.findOne.mockResolvedValue(makeUser({ id: userId, role: UserRole.BENEFACTOR, status: 'pending' }));
+      mockApplications.getBenefactorByUser.mockResolvedValue({ id: 'BEN1', status: 'pending' });
+
+      const me = await service.getMe(userId);
+
+      expect(me.application).toEqual({ id: 'BEN1', status: 'pending' });
+      expect(me.organization).toBeUndefined();
+    });
+
+    it('attaches the organisation for NGO staff and maps the role to its client form', async () => {
+      userRepo.findOne.mockResolvedValue(
+        makeUser({ id: userId, role: UserRole.NGO_ADMIN, orgId: 'ORG1', status: 'pending' }),
+      );
+      mockOrganizations.findOne.mockResolvedValue({ id: 'ORG1', status: OrgStatus.PENDING_VERIFICATION });
+
+      const me = await service.getMe(userId);
+
+      expect(me.role).toBe('ngo');
+      expect(me.orgId).toBe('ORG1');
+      expect(me.organization).toEqual({ id: 'ORG1', status: OrgStatus.PENDING_VERIFICATION });
+    });
+
+    // A dangling orgId must not stop a user reading their own account state.
+    it('omits the organisation when the org lookup fails', async () => {
+      userRepo.findOne.mockResolvedValue(makeUser({ id: userId, role: UserRole.NGO_ADMIN, orgId: 'MISSING' }));
+      mockOrganizations.findOne.mockRejectedValue(new Error('not found'));
+
+      const me = await service.getMe(userId);
+
+      expect(me.organization).toBeUndefined();
+    });
+
+    it('throws 401 when the user no longer exists', async () => {
+      userRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.getMe(userId)).rejects.toThrow(UnauthorizedException);
     });
   });
 });

@@ -9,6 +9,8 @@ import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtPayload } from 'src/common/interfaces/jwt-payload.interface';
 import { ApplicationsService } from 'src/modules/applications/applications.service';
 import { ListApplicationsQueryDto, ReviewApplicationDto } from 'src/modules/applications/dto/applications.dto';
+import { AuditService } from 'src/modules/audit/audit.service';
+import { ListAuditDto } from 'src/modules/audit/dto/list-audit.dto';
 
 import { AdminService } from './admin.service';
 import { AdminApproveDto } from './dto/admin-approve.dto';
@@ -21,7 +23,17 @@ export class AdminController {
   constructor(
     private readonly adminService: AdminService,
     private readonly applicationsService: ApplicationsService,
+    private readonly auditService: AuditService,
   ) {}
+
+  @Get('audit')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List audit log entries, newest first (keyset paginated)' })
+  @ApiResponse({ status: 200, description: 'Audit log entries' })
+  async listAudit(@Query() query: ListAuditDto) {
+    const { entries, nextCursor } = await this.auditService.findAll(query);
+    return { data: entries, meta: { cursor: nextCursor, limit: query.limit ?? 50 } };
+  }
 
   @Patch('organizations/:id')
   @ApiResponse({ status: 200, description: 'Organization approved or rejected' })

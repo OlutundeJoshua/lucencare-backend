@@ -13,6 +13,7 @@ import * as request from 'supertest';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RoleGuard } from 'src/common/guards/role.guard';
 import { ApplicationsService } from 'src/modules/applications/applications.service';
+import { AuditService } from 'src/modules/audit/audit.service';
 
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
@@ -38,6 +39,10 @@ const mockApplicationsService = {
   reviewBenefactor: jest.fn(),
 };
 
+const mockAuditService = {
+  findAll: jest.fn(),
+};
+
 // Populates request.user so @CurrentUser() resolves to a valid JWT payload
 const allowAllGuard = {
   canActivate: (context: ExecutionContext) => {
@@ -59,6 +64,7 @@ async function buildApp(roleGuardOverride = allowAllGuard): Promise<INestApplica
     providers: [
       { provide: AdminService, useValue: mockAdminService },
       { provide: ApplicationsService, useValue: mockApplicationsService },
+      { provide: AuditService, useValue: mockAuditService },
     ],
   })
     .overrideGuard(JwtAuthGuard)

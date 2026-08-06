@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
@@ -23,6 +24,7 @@ import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RoleGuard } from 'src/common/guards/role.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import { AllowPending } from 'src/common/decorators/allow-pending.decorator';
 import { JwtPayload } from 'src/common/interfaces/jwt-payload.interface';
 import { UserRole } from 'src/common/enums';
 
@@ -108,10 +110,15 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Authenticate with email and password' })
+  @ApiOperation({
+    summary: 'Authenticate with email, password and portal role',
+    description:
+      'The role must match the account. A mismatch returns the same 401 as a wrong password so the endpoint cannot be used to enumerate accounts or their roles.',
+  })
   @ApiResponse({ status: 200, description: 'Authenticated; access token in body, refresh token in httpOnly cookie' })
-  @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  @ApiResponse({ status: 401, description: 'Invalid credentials — wrong email, wrong password, or wrong portal' })
   @ApiResponse({ status: 403, description: 'Account suspended' })
+  @ApiResponse({ status: 422, description: 'Validation failed — role missing or not a known portal' })
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,
@@ -140,6 +147,7 @@ export class AuthController {
   }
 
   @Post('logout')
+  @AllowPending()
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -185,7 +193,21 @@ export class AuthController {
     return { accessToken: payload.accessToken, user: payload.user };
   }
 
+  @Get('me')
+  @AllowPending()
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Live account state — status, plus the application or organisation for this role',
+  })
+  @ApiResponse({ status: 200, description: 'Current user with role-specific application/organisation' })
+  @ApiResponse({ status: 401, description: 'Unauthenticated' })
+  async me(@CurrentUser() user: JwtPayload) {
+    return this.authService.getMe(user.sub);
+  }
+
   @Post('onboarding/patient')
+  @AllowPending()
   @UseGuards(JwtAuthGuard, RoleGuard)
   @Roles(UserRole.PATIENT)
   @ApiBearerAuth()
@@ -201,6 +223,7 @@ export class AuthController {
   }
 
   @Post('onboarding/ngo')
+  @AllowPending()
   @UseGuards(JwtAuthGuard, RoleGuard)
   @Roles(UserRole.NGO_ADMIN)
   @ApiBearerAuth()
@@ -212,10 +235,11 @@ export class AuthController {
     @Body() dto: NgoOnboardingDto,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.authService.completeNgoOnboarding(user.orgId as string, dto);
+    return this.authService.completeNgoOnboarding(user.orgId as string, dto, user.sub);
   }
 
   @Post('onboarding/hmo')
+  @AllowPending()
   @UseGuards(JwtAuthGuard, RoleGuard)
   @Roles(UserRole.HMO_COORDINATOR)
   @ApiBearerAuth()
@@ -227,10 +251,11 @@ export class AuthController {
     @Body() dto: HmoOnboardingDto,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.authService.completeHmoOnboarding(user.orgId as string, dto);
+    return this.authService.completeHmoOnboarding(user.orgId as string, dto, user.sub);
   }
 
   @Post('onboarding/professional')
+  @AllowPending()
   @UseGuards(JwtAuthGuard, RoleGuard)
   @Roles(UserRole.PROFESSIONAL)
   @ApiBearerAuth()
@@ -247,6 +272,7 @@ export class AuthController {
   }
 
   @Post('onboarding/benefactor')
+  @AllowPending()
   @UseGuards(JwtAuthGuard, RoleGuard)
   @Roles(UserRole.BENEFACTOR)
   @ApiBearerAuth()

@@ -1,9 +1,11 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
+import { DataSource } from 'typeorm';
 
 import { AuditAction, OrgStatus, ProgramStatus, StudyStatus } from 'src/common/enums';
 import { AuditService } from 'src/modules/audit/audit.service';
+import { Organization } from 'src/modules/organizations/entities/organization.entity';
 import { OrganizationsService } from 'src/modules/organizations/organizations.service';
 import { ProgramsService } from 'src/modules/programs/programs.service';
 import { StudiesService } from 'src/modules/studies/studies.service';
@@ -44,6 +46,25 @@ const mockStudy = {
   researcherId: '01HZZZZZZZZZZZZZZZZZZZZZAG',
 };
 
+const STAFF_USER_ID = '01HZZZZZZZZZZZZZZZZZZZZZAH';
+
+// reviewOrganization writes the org status and activates the staff user inside a
+// single transaction, then resolves the staff user for the queue payload.
+const mockOrgUpdate = jest.fn();
+const mockUserUpdate = jest.fn();
+const mockStaffFindOne = jest.fn();
+
+const mockTxManager = {
+  getRepository: jest.fn((entity: unknown) =>
+    entity === Organization ? { update: mockOrgUpdate } : { update: mockUserUpdate },
+  ),
+};
+
+const mockDataSource = {
+  transaction: jest.fn((cb: (m: typeof mockTxManager) => Promise<unknown>) => cb(mockTxManager)),
+  getRepository: jest.fn(() => ({ findOne: mockStaffFindOne })),
+};
+
 describe('AdminService', () => {
   let service: AdminService;
   let orgsService: jest.Mocked<Pick<OrganizationsService, 'findOne' | 'updateStatus'>>;
@@ -81,8 +102,16 @@ describe('AdminService', () => {
           provide: getQueueToken(ADMIN_QUEUE),
           useValue: { add: jest.fn() },
         },
+        {
+          provide: DataSource,
+          useValue: mockDataSource,
+        },
       ],
     }).compile();
+
+    mockOrgUpdate.mockReset().mockResolvedValue(undefined);
+    mockUserUpdate.mockReset().mockResolvedValue(undefined);
+    mockStaffFindOne.mockReset().mockResolvedValue({ id: STAFF_USER_ID });
 
     service = module.get(AdminService);
     orgsService = module.get(OrganizationsService);
@@ -118,16 +147,20 @@ describe('AdminService', () => {
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('approves org: calls updateStatus(ACTIVE), writes ADMIN_APPROVE audit, enqueues ORG_VERIFIED_JOB', async () => {
+    it('approves org: sets ACTIVE, activates the staff user, audits, enqueues ORG_VERIFIED_JOB', async () => {
       orgsService.findOne.mockResolvedValue(mockOrg as any);
-      orgsService.updateStatus.mockResolvedValue(undefined as any);
       auditService.log.mockResolvedValue(undefined);
       adminQueue.add.mockResolvedValue(undefined);
 
       const dto: AdminApproveDto = { status: 'approved' };
       await service.reviewOrganization(mockOrg.id, ADMIN_USER_ID, dto);
 
-      expect(orgsService.updateStatus).toHaveBeenCalledWith(mockOrg.id, OrgStatus.ACTIVE, ADMIN_USER_ID);
+      expect(mockOrgUpdate).toHaveBeenCalledWith(
+        { id: mockOrg.id },
+        expect.objectContaining({ status: OrgStatus.ACTIVE, verifiedBy: ADMIN_USER_ID }),
+      );
+      // Parity with the professional/benefactor review path.
+      expect(mockUserUpdate).toHaveBeenCalledWith({ orgId: mockOrg.id }, { status: 'active' });
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: AuditAction.ADMIN_APPROVE, resourceId: mockOrg.id }),
       );
@@ -138,16 +171,22 @@ describe('AdminService', () => {
       expect(adminQueue.add).not.toHaveBeenCalledWith(ORG_REJECTED_JOB, expect.anything());
     });
 
-    it('rejects org: calls updateStatus(REJECTED), writes ADMIN_REJECT audit, enqueues ORG_REJECTED_JOB with reason', async () => {
+    it('rejects org: sets REJECTED with reason, leaves the user pending, enqueues ORG_REJECTED_JOB', async () => {
       orgsService.findOne.mockResolvedValue(mockOrg as any);
-      orgsService.updateStatus.mockResolvedValue(undefined as any);
       auditService.log.mockResolvedValue(undefined);
       adminQueue.add.mockResolvedValue(undefined);
 
       const dto: AdminApproveDto = { status: 'rejected', reason: 'Documents incomplete' };
       await service.reviewOrganization(mockOrg.id, ADMIN_USER_ID, dto);
 
-      expect(orgsService.updateStatus).toHaveBeenCalledWith(mockOrg.id, OrgStatus.REJECTED, ADMIN_USER_ID);
+      expect(mockOrgUpdate).toHaveBeenCalledWith(
+        { id: mockOrg.id },
+        expect.objectContaining({
+          status: OrgStatus.REJECTED,
+          rejectionReason: 'Documents incomplete',
+        }),
+      );
+      expect(mockUserUpdate).not.toHaveBeenCalled();
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: AuditAction.ADMIN_REJECT,
@@ -162,9 +201,22 @@ describe('AdminService', () => {
       expect(adminQueue.add).not.toHaveBeenCalledWith(ORG_VERIFIED_JOB, expect.anything());
     });
 
+    // org.createdBy is null for orgs created during unauthenticated signup.
+    it('resolves the queue payload recipient by orgId rather than org.createdBy', async () => {
+      orgsService.findOne.mockResolvedValue({ ...mockOrg, createdBy: undefined } as any);
+      auditService.log.mockResolvedValue(undefined);
+      adminQueue.add.mockResolvedValue(undefined);
+
+      await service.reviewOrganization(mockOrg.id, ADMIN_USER_ID, { status: 'approved' });
+
+      expect(adminQueue.add).toHaveBeenCalledWith(
+        ORG_VERIFIED_JOB,
+        expect.objectContaining({ creatorUserId: STAFF_USER_ID }),
+      );
+    });
+
     it('omits metadata when approving without a reason', async () => {
       orgsService.findOne.mockResolvedValue(mockOrg as any);
-      orgsService.updateStatus.mockResolvedValue(undefined as any);
       auditService.log.mockResolvedValue(undefined);
       adminQueue.add.mockResolvedValue(undefined);
 

@@ -3,16 +3,20 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 
 import { OrgStatus } from 'src/common/enums';
+import { User } from 'src/modules/auth/entities/user.entity';
 
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { ListOrganizationsDto } from './dto/list-organizations.dto';
 import { Organization } from './entities/organization.entity';
+import { OrganizationWithContact } from './interfaces/organization-with-contact.interface';
 
 @Injectable()
 export class OrganizationsService {
   constructor(
     @InjectRepository(Organization)
     private readonly orgRepo: Repository<Organization>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
   ) {}
 
   // A-6: This method exists for AuthService to call inside a DataSource.transaction().
@@ -51,7 +55,9 @@ export class OrganizationsService {
     return org;
   }
 
-  async findAll(dto: ListOrganizationsDto): Promise<{ orgs: Organization[]; nextCursor?: string }> {
+  async findAll(
+    dto: ListOrganizationsDto,
+  ): Promise<{ orgs: OrganizationWithContact[]; nextCursor?: string }> {
     const limit = dto.limit ?? 20;
 
     const qb = this.orgRepo
@@ -64,6 +70,10 @@ export class OrganizationsService {
       qb.andWhere('org.status = :status', { status: dto.status });
     }
 
+    if (dto.type) {
+      qb.andWhere('org.type = :type', { type: dto.type });
+    }
+
     if (dto.cursor) {
       qb.andWhere('org.id > :cursor', { cursor: dto.cursor });
     }
@@ -73,7 +83,23 @@ export class OrganizationsService {
     if (hasMore) rows.pop();
     const nextCursor = hasMore ? rows[rows.length - 1].id : undefined;
 
-    return { orgs: rows, nextCursor };
+    return { orgs: await this.attachContactPerson(rows), nextCursor };
+  }
+
+  // The admin review screens display who submitted an application. That name
+  // lives on users.name — organizations only stores contactEmail.
+  private async attachContactPerson(orgs: Organization[]): Promise<OrganizationWithContact[]> {
+    if (orgs.length === 0) return [];
+
+    const staff = await this.userRepo
+      .createQueryBuilder('u')
+      .select(['u.orgId', 'u.name'])
+      .where('u.org_id IN (:...orgIds)', { orgIds: orgs.map((o) => o.id) })
+      .getMany();
+
+    const nameByOrgId = new Map(staff.map((u) => [u.orgId, u.name]));
+
+    return orgs.map((org) => Object.assign(org, { contactPerson: nameByOrgId.get(org.id) }));
   }
 
   // A-2: positional args (id, status, adminId) to match AdminService's existing call:

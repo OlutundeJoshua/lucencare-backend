@@ -3,7 +3,15 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { DataSource } from 'typeorm';
 
-import { AuditAction, OrgStatus, ProgramStatus, StudyStatus } from 'src/common/enums';
+import {
+  ApplicantRole,
+  ApplicationEmailEvent,
+  AuditAction,
+  OrgStatus,
+  OrgType,
+  ProgramStatus,
+  StudyStatus,
+} from 'src/common/enums';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { Organization } from 'src/modules/organizations/entities/organization.entity';
 import { OrganizationsService } from 'src/modules/organizations/organizations.service';
@@ -12,10 +20,11 @@ import { StudiesService } from 'src/modules/studies/studies.service';
 import { MatchingService } from 'src/modules/matching/matching.service';
 import {
   ADMIN_QUEUE,
-  ORG_REJECTED_JOB,
-  ORG_VERIFIED_JOB,
+  MAIL_JOB_OPTIONS,
+  MAIL_QUEUE,
   PROGRAM_APPROVED_JOB,
   PROGRAM_REJECTED_JOB,
+  SEND_APPLICATION_STATUS_JOB,
   STUDY_APPROVED_JOB,
   STUDY_REJECTED_JOB,
 } from 'src/queues/queues.constants';
@@ -28,7 +37,9 @@ const ADMIN_USER_ID = '01HZZZZZZZZZZZZZZZZZZZZZAA';
 const mockOrg = {
   id: '01HZZZZZZZZZZZZZZZZZZZZZAB',
   name: 'Test Org',
+  type: OrgType.NGO,
   status: OrgStatus.PENDING_VERIFICATION,
+  contactEmail: 'ops@testorg.example',
   createdBy: '01HZZZZZZZZZZZZZZZZZZZZZAC',
 };
 
@@ -47,6 +58,7 @@ const mockStudy = {
 };
 
 const STAFF_USER_ID = '01HZZZZZZZZZZZZZZZZZZZZZAH';
+const STAFF_USER_EMAIL = 'staff@testorg.example';
 
 // reviewOrganization writes the org status and activates the staff user inside a
 // single transaction, then resolves the staff user for the queue payload.
@@ -73,6 +85,7 @@ describe('AdminService', () => {
   let matchingService: jest.Mocked<Pick<MatchingService, 'indexProgram' | 'indexStudy'>>;
   let auditService: jest.Mocked<Pick<AuditService, 'log'>>;
   let adminQueue: { add: jest.Mock };
+  let mailQueue: { add: jest.Mock };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -103,6 +116,10 @@ describe('AdminService', () => {
           useValue: { add: jest.fn() },
         },
         {
+          provide: getQueueToken(MAIL_QUEUE),
+          useValue: { add: jest.fn() },
+        },
+        {
           provide: DataSource,
           useValue: mockDataSource,
         },
@@ -111,7 +128,7 @@ describe('AdminService', () => {
 
     mockOrgUpdate.mockReset().mockResolvedValue(undefined);
     mockUserUpdate.mockReset().mockResolvedValue(undefined);
-    mockStaffFindOne.mockReset().mockResolvedValue({ id: STAFF_USER_ID });
+    mockStaffFindOne.mockReset().mockResolvedValue({ id: STAFF_USER_ID, email: STAFF_USER_EMAIL });
 
     service = module.get(AdminService);
     orgsService = module.get(OrganizationsService);
@@ -120,6 +137,7 @@ describe('AdminService', () => {
     matchingService = module.get(MatchingService);
     auditService = module.get(AuditService);
     adminQueue = module.get(getQueueToken(ADMIN_QUEUE));
+    mailQueue = module.get(getQueueToken(MAIL_QUEUE));
   });
 
   it('should be defined', () => {
@@ -147,10 +165,10 @@ describe('AdminService', () => {
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('approves org: sets ACTIVE, activates the staff user, audits, enqueues ORG_VERIFIED_JOB', async () => {
+    it('approves org: sets ACTIVE, activates the staff user, audits, emails the approval', async () => {
       orgsService.findOne.mockResolvedValue(mockOrg as any);
       auditService.log.mockResolvedValue(undefined);
-      adminQueue.add.mockResolvedValue(undefined);
+      mailQueue.add.mockResolvedValue(undefined);
 
       const dto: AdminApproveDto = { status: 'approved' };
       await service.reviewOrganization(mockOrg.id, ADMIN_USER_ID, dto);
@@ -164,17 +182,22 @@ describe('AdminService', () => {
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: AuditAction.ADMIN_APPROVE, resourceId: mockOrg.id }),
       );
-      expect(adminQueue.add).toHaveBeenCalledWith(
-        ORG_VERIFIED_JOB,
-        expect.objectContaining({ orgId: mockOrg.id, orgName: mockOrg.name }),
+      // Replaces the old ORG_VERIFIED_JOB, which had no handler and was discarded.
+      expect(mailQueue.add).toHaveBeenCalledWith(
+        SEND_APPLICATION_STATUS_JOB,
+        expect.objectContaining({
+          applicantName: mockOrg.name,
+          role: ApplicantRole.NGO,
+          event: ApplicationEmailEvent.APPROVED,
+        }),
+        MAIL_JOB_OPTIONS,
       );
-      expect(adminQueue.add).not.toHaveBeenCalledWith(ORG_REJECTED_JOB, expect.anything());
     });
 
-    it('rejects org: sets REJECTED with reason, leaves the user pending, enqueues ORG_REJECTED_JOB', async () => {
+    it('rejects org: sets REJECTED with reason, leaves the user pending, emails the reason', async () => {
       orgsService.findOne.mockResolvedValue(mockOrg as any);
       auditService.log.mockResolvedValue(undefined);
-      adminQueue.add.mockResolvedValue(undefined);
+      mailQueue.add.mockResolvedValue(undefined);
 
       const dto: AdminApproveDto = { status: 'rejected', reason: 'Documents incomplete' };
       await service.reviewOrganization(mockOrg.id, ADMIN_USER_ID, dto);
@@ -194,24 +217,57 @@ describe('AdminService', () => {
           metadata: { reason: 'Documents incomplete' },
         }),
       );
-      expect(adminQueue.add).toHaveBeenCalledWith(
-        ORG_REJECTED_JOB,
-        expect.objectContaining({ orgId: mockOrg.id, reason: 'Documents incomplete' }),
+      expect(mailQueue.add).toHaveBeenCalledWith(
+        SEND_APPLICATION_STATUS_JOB,
+        expect.objectContaining({
+          event: ApplicationEmailEvent.REJECTED,
+          reason: 'Documents incomplete',
+        }),
+        MAIL_JOB_OPTIONS,
       );
-      expect(adminQueue.add).not.toHaveBeenCalledWith(ORG_VERIFIED_JOB, expect.anything());
     });
 
-    // org.createdBy is null for orgs created during unauthenticated signup.
-    it('resolves the queue payload recipient by orgId rather than org.createdBy', async () => {
-      orgsService.findOne.mockResolvedValue({ ...mockOrg, createdBy: undefined } as any);
+    // Both org types flow through this one method, so reading org.type matters.
+    it('addresses an HMO as an HMO, not an NGO', async () => {
+      orgsService.findOne.mockResolvedValue({ ...mockOrg, type: OrgType.HMO } as any);
       auditService.log.mockResolvedValue(undefined);
-      adminQueue.add.mockResolvedValue(undefined);
+      mailQueue.add.mockResolvedValue(undefined);
 
       await service.reviewOrganization(mockOrg.id, ADMIN_USER_ID, { status: 'approved' });
 
-      expect(adminQueue.add).toHaveBeenCalledWith(
-        ORG_VERIFIED_JOB,
-        expect.objectContaining({ creatorUserId: STAFF_USER_ID }),
+      expect(mailQueue.add).toHaveBeenCalledWith(
+        SEND_APPLICATION_STATUS_JOB,
+        expect.objectContaining({ role: ApplicantRole.HMO }),
+        MAIL_JOB_OPTIONS,
+      );
+    });
+
+    // The review has already committed; a queue outage must not report failure for it,
+    // or the admin retries into a 409 "not in a reviewable state".
+    it('still succeeds when the mail enqueue fails', async () => {
+      orgsService.findOne.mockResolvedValue(mockOrg as any);
+      auditService.log.mockResolvedValue(undefined);
+      mailQueue.add.mockRejectedValue(new Error('redis unreachable'));
+
+      await expect(
+        service.reviewOrganization(mockOrg.id, ADMIN_USER_ID, { status: 'approved' }),
+      ).resolves.toBeDefined();
+
+      expect(mockUserUpdate).toHaveBeenCalledWith({ orgId: mockOrg.id }, { status: 'active' });
+    });
+
+    // org.createdBy is null for orgs created during unauthenticated signup.
+    it('emails the staff user resolved by orgId', async () => {
+      orgsService.findOne.mockResolvedValue({ ...mockOrg, createdBy: undefined } as any);
+      auditService.log.mockResolvedValue(undefined);
+      mailQueue.add.mockResolvedValue(undefined);
+
+      await service.reviewOrganization(mockOrg.id, ADMIN_USER_ID, { status: 'approved' });
+
+      expect(mailQueue.add).toHaveBeenCalledWith(
+        SEND_APPLICATION_STATUS_JOB,
+        expect.objectContaining({ to: STAFF_USER_EMAIL }),
+        MAIL_JOB_OPTIONS,
       );
     });
 

@@ -8,11 +8,20 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
 import { DataSource } from 'typeorm';
 
-import { AuditAction, ConsentStatus, OrgStatus, UserRole } from 'src/common/enums';
+import {
+  ApplicantRole,
+  ApplicationEmailEvent,
+  AuditAction,
+  ConsentStatus,
+  OrgStatus,
+  UserRole,
+} from 'src/common/enums';
 import {
   ADMIN_QUEUE,
+  MAIL_JOB_OPTIONS,
   MAIL_QUEUE,
   ORG_VERIFICATION_JOB,
+  SEND_APPLICATION_STATUS_JOB,
   SEND_OTP_JOB,
   SEND_PATIENT_ONBOARDING_WELCOME_JOB,
   SEND_RESET_PASSWORD_JOB,
@@ -344,6 +353,7 @@ describe('AuthService', () => {
       expect(mockMailQueue.add).toHaveBeenCalledWith(
         SEND_OTP_JOB,
         expect.objectContaining({ to: 'researcher@hospital.ng', expiresInMinutes: 10 }),
+        MAIL_JOB_OPTIONS,
       );
     });
   });
@@ -633,6 +643,7 @@ describe('AuthService', () => {
       expect(mockMailQueue.add).toHaveBeenCalledWith(
         SEND_RESET_PASSWORD_JOB,
         expect.objectContaining({ to: user.email }),
+        MAIL_JOB_OPTIONS,
       );
     });
 
@@ -714,10 +725,11 @@ describe('AuthService', () => {
         { userId },
         expect.objectContaining({ isCaregiver: false, country: 'NG' }),
       );
-      expect(mockMailQueue.add).toHaveBeenCalledWith(SEND_PATIENT_ONBOARDING_WELCOME_JOB, {
-        to: 'ada@example.com',
-        patientName: 'Ada Okafor',
-      });
+      expect(mockMailQueue.add).toHaveBeenCalledWith(
+        SEND_PATIENT_ONBOARDING_WELCOME_JOB,
+        { to: 'ada@example.com', patientName: 'Ada Okafor' },
+        MAIL_JOB_OPTIONS,
+      );
     });
 
     it('throws 409 when the patient profile does not exist', async () => {
@@ -855,6 +867,75 @@ describe('AuthService', () => {
         ConflictException,
       );
       expect(mockAdminQueue.add).not.toHaveBeenCalled();
+    });
+
+    // Previously the applicant got nothing — only platform admins were notified,
+    // in-app, while the wizard promised them an email.
+    it('emails the applicant that their NGO application was received', async () => {
+      const orgRepo = makeMockRepo();
+      orgRepo.findOne.mockResolvedValue({ id: orgId, contactEmail: 'admin@hopehealth.org' });
+      orgRepo.update.mockResolvedValue({ affected: 1 });
+      mockDataSource.getRepository.mockReturnValue(orgRepo);
+
+      await service.completeNgoOnboarding(orgId, dto, USER_ID);
+
+      expect(mockMailQueue.add).toHaveBeenCalledWith(
+        SEND_APPLICATION_STATUS_JOB,
+        expect.objectContaining({
+          to: 'admin@hopehealth.org',
+          applicantName: dto.orgName,
+          role: ApplicantRole.NGO,
+          event: ApplicationEmailEvent.RECEIVED,
+        }),
+        MAIL_JOB_OPTIONS,
+      );
+    });
+
+    it('still succeeds when the mail enqueue fails', async () => {
+      const orgRepo = makeMockRepo();
+      orgRepo.findOne.mockResolvedValue({ id: orgId, contactEmail: 'admin@hopehealth.org' });
+      orgRepo.update.mockResolvedValue({ affected: 1 });
+      mockDataSource.getRepository.mockReturnValue(orgRepo);
+      mockMailQueue.add.mockRejectedValue(new Error('redis unreachable'));
+
+      await expect(service.completeNgoOnboarding(orgId, dto, USER_ID)).resolves.toBeDefined();
+      expect(orgRepo.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('completeHmoOnboarding', () => {
+    const orgId = 'ORG012345678901234567890';
+    const USER_ID = 'USER01234567890123456789';
+    const dto = {
+      orgName: 'Apex Health HMO',
+      licenceNumber: 'LIC-4455',
+      contactPhone: '+2348030000000',
+      coverageRegion: 'Lagos',
+      enrolledPatientCount: '5000',
+      specialtyFocus: 'Chronic care',
+      baaAcknowledgement: true as const,
+      termsConsent: true as const,
+    };
+
+    // Both org onboarding methods are near-identical, so labelling an HMO as an NGO
+    // is the easy mistake here.
+    it('emails the applicant as an HMO, not an NGO', async () => {
+      const orgRepo = makeMockRepo();
+      orgRepo.findOne.mockResolvedValue({ id: orgId, contactEmail: 'ops@apexhealth.org' });
+      orgRepo.update.mockResolvedValue({ affected: 1 });
+      mockDataSource.getRepository.mockReturnValue(orgRepo);
+
+      await service.completeHmoOnboarding(orgId, dto, USER_ID);
+
+      expect(mockMailQueue.add).toHaveBeenCalledWith(
+        SEND_APPLICATION_STATUS_JOB,
+        expect.objectContaining({
+          to: 'ops@apexhealth.org',
+          role: ApplicantRole.HMO,
+          event: ApplicationEmailEvent.RECEIVED,
+        }),
+        MAIL_JOB_OPTIONS,
+      );
     });
   });
 

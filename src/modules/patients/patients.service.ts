@@ -17,7 +17,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Queue } from 'bullmq';
 
 import { AuditAction, ConsentPurpose, ConsentStatus, HmoLinkRequestStatus, NotificationType, UserRole } from 'src/common/enums';
-import { MAIL_QUEUE, SEND_PATIENT_CREDENTIALS_JOB } from 'src/queues/queues.constants';
+import { MAIL_JOB_OPTIONS, MAIL_QUEUE, SEND_PATIENT_CREDENTIALS_JOB } from 'src/queues/queues.constants';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
 import { ExportService } from 'src/modules/export/export.service';
@@ -182,10 +182,11 @@ export class PatientsService {
       return patientRepo.save(newPatient);
     });
 
-    await this.mailQueue.add(SEND_PATIENT_CREDENTIALS_JOB, {
-      to: dto.email,
-      tempPassword,
-    });
+    await this.mailQueue.add(
+      SEND_PATIENT_CREDENTIALS_JOB,
+      { to: dto.email, tempPassword },
+      MAIL_JOB_OPTIONS,
+    );
 
     return patient;
   }

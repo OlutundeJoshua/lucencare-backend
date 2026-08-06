@@ -11,6 +11,7 @@ import {
   ForbiddenException,
   Injectable,
   Inject,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -20,7 +21,16 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource, Repository } from 'typeorm';
 import { Redis } from 'ioredis';
 
-import { AuditAction, ConsentPurpose, ConsentStatus, OrgStatus, OrgType, UserRole } from 'src/common/enums';
+import {
+  ApplicantRole,
+  ApplicationEmailEvent,
+  AuditAction,
+  ConsentPurpose,
+  ConsentStatus,
+  OrgStatus,
+  OrgType,
+  UserRole,
+} from 'src/common/enums';
 import { SNAPSHOT_FIELDS } from 'src/common/constants/snapshot-fields';
 import {
   CLIENT_ROLE_TO_USER_ROLE,
@@ -28,12 +38,15 @@ import {
 } from 'src/common/constants/client-roles';
 import {
   ADMIN_QUEUE,
+  MAIL_JOB_OPTIONS,
   MAIL_QUEUE,
   ORG_VERIFICATION_JOB,
+  SEND_APPLICATION_STATUS_JOB,
   SEND_OTP_JOB,
   SEND_PATIENT_ONBOARDING_WELCOME_JOB,
   SEND_RESET_PASSWORD_JOB,
 } from 'src/queues/queues.constants';
+import { SendApplicationStatusJob } from 'src/queues/interfaces/send-application-status-job.interface';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { ApplicationsService } from 'src/modules/applications/applications.service';
 import { OrganizationsService } from 'src/modules/organizations/organizations.service';
@@ -71,6 +84,8 @@ const RESET_TOKEN_TTL_SECONDS = 3600; // 1 hour
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly dataSource: DataSource,
@@ -256,11 +271,11 @@ export class AuthService {
   async requestOtp(dto: RequestOtpDto): Promise<void> {
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     await this.redis.set(`otp:${dto.email}`, code, 'EX', OTP_TTL_SECONDS);
-    await this.mailQueue.add(SEND_OTP_JOB, {
-      to: dto.email,
-      code,
-      expiresInMinutes: OTP_TTL_SECONDS / 60,
-    });
+    await this.mailQueue.add(
+      SEND_OTP_JOB,
+      { to: dto.email, code, expiresInMinutes: OTP_TTL_SECONDS / 60 },
+      MAIL_JOB_OPTIONS,
+    );
   }
 
   async login(dto: LoginDto): Promise<AuthPayload> {
@@ -363,11 +378,11 @@ export class AuthService {
 
     const token = randomBytes(32).toString('hex');
     await this.redis.set(`reset:${token}`, user.id, 'EX', RESET_TOKEN_TTL_SECONDS);
-    await this.mailQueue.add(SEND_RESET_PASSWORD_JOB, {
-      to: dto.email,
-      token,
-      expiresInMinutes: RESET_TOKEN_TTL_SECONDS / 60,
-    });
+    await this.mailQueue.add(
+      SEND_RESET_PASSWORD_JOB,
+      { to: dto.email, token, expiresInMinutes: RESET_TOKEN_TTL_SECONDS / 60 },
+      MAIL_JOB_OPTIONS,
+    );
   }
 
   async resetPassword(dto: ResetPasswordDto): Promise<void> {
@@ -499,10 +514,11 @@ export class AuthService {
     });
 
     if (user) {
-      await this.mailQueue.add(SEND_PATIENT_ONBOARDING_WELCOME_JOB, {
-        to: user.email,
-        patientName: patient.name,
-      });
+      await this.mailQueue.add(
+        SEND_PATIENT_ONBOARDING_WELCOME_JOB,
+        { to: user.email, patientName: patient.name },
+        MAIL_JOB_OPTIONS,
+      );
     }
 
     return patientRepo.findOne({ where: { userId } }) as Promise<object>;
@@ -541,6 +557,13 @@ export class AuthService {
       contactEmail: org.contactEmail,
     });
 
+    await this.sendApplicationStatusEmail({
+      to: org.contactEmail,
+      applicantName: dto.orgName,
+      role: ApplicantRole.NGO,
+      event: ApplicationEmailEvent.RECEIVED,
+    });
+
     return orgRepo.findOne({ where: { id: orgId } }) as Promise<object>;
   }
 
@@ -574,7 +597,31 @@ export class AuthService {
       contactEmail: org.contactEmail,
     });
 
+    await this.sendApplicationStatusEmail({
+      to: org.contactEmail,
+      applicantName: dto.orgName,
+      // HMO, not NGO — both org types flow through near-identical methods and
+      // mislabelling the applicant here is the easy mistake.
+      role: ApplicantRole.HMO,
+      event: ApplicationEmailEvent.RECEIVED,
+    });
+
     return orgRepo.findOne({ where: { id: orgId } }) as Promise<object>;
+  }
+
+  /**
+   * Enqueues an application email without letting a queue outage fail the request.
+   * The onboarding write has already committed by this point, so a thrown enqueue
+   * would report failure for work that actually succeeded.
+   */
+  private async sendApplicationStatusEmail(payload: SendApplicationStatusJob): Promise<void> {
+    try {
+      await this.mailQueue.add(SEND_APPLICATION_STATUS_JOB, payload, MAIL_JOB_OPTIONS);
+    } catch (err) {
+      this.logger.error(
+        `Failed to enqueue ${payload.event} email for ${payload.role}: ${(err as Error).message}`,
+      );
+    }
   }
 
   // Live account state for the authenticated user.

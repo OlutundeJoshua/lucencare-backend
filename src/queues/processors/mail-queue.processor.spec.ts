@@ -3,6 +3,7 @@ import { Job } from 'bullmq';
 import { Test, TestingModule } from '@nestjs/testing';
 
 import {
+  SEND_APPLICATION_STATUS_JOB,
   SEND_APPOINTMENT_CONFIRMATION_JOB,
   SEND_MEDICATION_REMINDER_EMAIL_JOB,
   SEND_OTP_JOB,
@@ -12,6 +13,7 @@ import {
 } from 'src/queues/queues.constants';
 
 import { MailQueueProcessor } from './mail-queue.processor';
+import { SendApplicationStatusProcessor } from './send-application-status.processor';
 import { SendAppointmentConfirmationProcessor } from './send-appointment-confirmation.processor';
 import { SendMedicationReminderEmailProcessor } from './send-medication-reminder-email.processor';
 import { SendOtpProcessor } from './send-otp.processor';
@@ -27,6 +29,7 @@ describe('MailQueueProcessor', () => {
   let sendAppointmentConfirmationProcessor: { process: jest.Mock };
   let sendPatientOnboardingWelcomeProcessor: { process: jest.Mock };
   let sendResetPasswordProcessor: { process: jest.Mock };
+  let sendApplicationStatusProcessor: { process: jest.Mock };
 
   beforeEach(async () => {
     sendOtpProcessor = { process: jest.fn() };
@@ -35,6 +38,7 @@ describe('MailQueueProcessor', () => {
     sendAppointmentConfirmationProcessor = { process: jest.fn() };
     sendPatientOnboardingWelcomeProcessor = { process: jest.fn() };
     sendResetPasswordProcessor = { process: jest.fn() };
+    sendApplicationStatusProcessor = { process: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -45,6 +49,7 @@ describe('MailQueueProcessor', () => {
         { provide: SendAppointmentConfirmationProcessor, useValue: sendAppointmentConfirmationProcessor },
         { provide: SendPatientOnboardingWelcomeProcessor, useValue: sendPatientOnboardingWelcomeProcessor },
         { provide: SendResetPasswordProcessor, useValue: sendResetPasswordProcessor },
+        { provide: SendApplicationStatusProcessor, useValue: sendApplicationStatusProcessor },
       ],
     }).compile();
 
@@ -96,6 +101,12 @@ describe('MailQueueProcessor', () => {
     expect(sendResetPasswordProcessor.process).toHaveBeenCalledWith(job);
   });
 
+  it('routes send_application_status jobs to SendApplicationStatusProcessor', async () => {
+    const job = { name: SEND_APPLICATION_STATUS_JOB, data: {} } as Job;
+    await processor.process(job);
+    expect(sendApplicationStatusProcessor.process).toHaveBeenCalledWith(job);
+  });
+
   it('does nothing for an unrecognized job name', async () => {
     const job = { name: 'some_other_job', data: {} } as Job;
     await processor.process(job);
@@ -105,5 +116,6 @@ describe('MailQueueProcessor', () => {
     expect(sendAppointmentConfirmationProcessor.process).not.toHaveBeenCalled();
     expect(sendPatientOnboardingWelcomeProcessor.process).not.toHaveBeenCalled();
     expect(sendResetPasswordProcessor.process).not.toHaveBeenCalled();
+    expect(sendApplicationStatusProcessor.process).not.toHaveBeenCalled();
   });
 });

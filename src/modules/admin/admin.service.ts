@@ -1,9 +1,17 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { DataSource } from 'typeorm';
 
-import { AuditAction, OrgStatus, ProgramStatus, StudyStatus } from 'src/common/enums';
+import {
+  ApplicantRole,
+  ApplicationEmailEvent,
+  AuditAction,
+  OrgStatus,
+  OrgType,
+  ProgramStatus,
+  StudyStatus,
+} from 'src/common/enums';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { User } from 'src/modules/auth/entities/user.entity';
 import { Organization } from 'src/modules/organizations/entities/organization.entity';
@@ -15,18 +23,22 @@ import { StudiesService } from 'src/modules/studies/studies.service';
 import { MatchingService } from 'src/modules/matching/matching.service';
 import {
   ADMIN_QUEUE,
-  ORG_REJECTED_JOB,
-  ORG_VERIFIED_JOB,
+  MAIL_JOB_OPTIONS,
+  MAIL_QUEUE,
   PROGRAM_APPROVED_JOB,
   PROGRAM_REJECTED_JOB,
+  SEND_APPLICATION_STATUS_JOB,
   STUDY_APPROVED_JOB,
   STUDY_REJECTED_JOB,
 } from 'src/queues/queues.constants';
+import { SendApplicationStatusJob } from 'src/queues/interfaces/send-application-status-job.interface';
 
 import { AdminApproveDto } from './dto/admin-approve.dto';
 
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
+
   constructor(
     private readonly orgsService: OrganizationsService,
     private readonly programsService: ProgramsService,
@@ -34,6 +46,7 @@ export class AdminService {
     private readonly matchingService: MatchingService,
     private readonly auditService: AuditService,
     @InjectQueue(ADMIN_QUEUE) private readonly adminQueue: Queue,
+    @InjectQueue(MAIL_QUEUE) private readonly mailQueue: Queue,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -77,25 +90,39 @@ export class AdminService {
 
     // org.createdBy is null for orgs created during unauthenticated signup — the
     // EntityActorSubscriber has no CLS userId to read. Resolve the staff user by orgId.
+    // Selecting email/name here too, so telling them the outcome costs no extra query.
     const staffUser = await this.dataSource
       .getRepository(User)
-      .findOne({ where: { orgId }, select: ['id'] });
+      .findOne({ where: { orgId }, select: ['id', 'email', 'name'] });
 
-    if (approved) {
-      await this.adminQueue.add(ORG_VERIFIED_JOB, {
-        orgId: org.id,
-        creatorUserId: staffUser?.id ?? org.createdBy,
-        orgName: org.name,
-      });
-    } else {
-      await this.adminQueue.add(ORG_REJECTED_JOB, {
-        orgId: org.id,
-        creatorUserId: staffUser?.id ?? org.createdBy,
-        reason: dto.reason,
-      });
-    }
+    // Replaces ORG_VERIFIED_JOB / ORG_REJECTED_JOB, which were enqueued on ADMIN_QUEUE
+    // with no handler — AdminQueueProcessor's `default: return` plus removeOnComplete
+    // meant every approval and rejection was silently discarded.
+    await this.enqueueOutcomeEmail({
+      to: staffUser?.email ?? org.contactEmail,
+      applicantName: org.name,
+      // Both org types come through here, so read the type rather than assuming NGO.
+      role: org.type === OrgType.HMO ? ApplicantRole.HMO : ApplicantRole.NGO,
+      event: approved ? ApplicationEmailEvent.APPROVED : ApplicationEmailEvent.REJECTED,
+      reason: dto.reason,
+    });
 
     return (await this.orgsService.findOne(orgId)) as unknown as Organization;
+  }
+
+  /**
+   * The review has already committed by the time this runs. If the enqueue threw, the
+   * admin would see a 500 for an approval that succeeded and a 409 "not in a
+   * reviewable state" on retry — so a queue outage is logged, not surfaced.
+   */
+  private async enqueueOutcomeEmail(payload: SendApplicationStatusJob): Promise<void> {
+    try {
+      await this.mailQueue.add(SEND_APPLICATION_STATUS_JOB, payload, MAIL_JOB_OPTIONS);
+    } catch (err) {
+      this.logger.error(
+        `Failed to enqueue ${payload.event} email for ${payload.role}: ${(err as Error).message}`,
+      );
+    }
   }
 
   async reviewProgram(programId: string, adminUserId: string, dto: AdminApproveDto): Promise<Program> {

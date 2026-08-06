@@ -5,7 +5,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotificationType, UserRole } from 'src/common/enums';
 import { User } from 'src/modules/auth/entities/user.entity';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
-import { ORG_VERIFICATION_JOB, ORG_VERIFIED_JOB } from 'src/queues/queues.constants';
+import { APPLICATION_REVIEW_JOB, ORG_VERIFICATION_JOB } from 'src/queues/queues.constants';
 import { OrgVerificationJob } from 'src/queues/interfaces/org-verification-job.interface';
 
 import { OrgVerificationProcessor } from './org-verification.processor';
@@ -57,7 +57,7 @@ describe('OrgVerificationProcessor', () => {
   });
 
   it('ignores jobs multiplexed onto the same queue under a different name', async () => {
-    await processor.process(makeJob(ORG_VERIFIED_JOB));
+    await processor.process(makeJob(APPLICATION_REVIEW_JOB));
 
     expect(userRepo.find).not.toHaveBeenCalled();
     expect(notificationsService.createBulk).not.toHaveBeenCalled();

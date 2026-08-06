@@ -19,6 +19,7 @@ import { BatchNotifyProcessor } from './processors/batch-notify.processor';
 import { ConsentRevokedProcessor } from './processors/consent-revoked.processor';
 import { ProgramReviewProcessor } from './processors/program-review.processor';
 import { StudyReviewProcessor } from './processors/study-review.processor';
+import { ApplicationReviewProcessor } from './processors/application-review.processor';
 import { OrgVerificationProcessor } from './processors/org-verification.processor';
 import { ProgramApprovedProcessor } from './processors/program-approved.processor';
 import { StudyApprovedProcessor } from './processors/study-approved.processor';
@@ -30,6 +31,7 @@ import { MedicationRefillCheckProcessor } from './processors/medication-refill-c
 import { SendMedicationReminderEmailProcessor } from './processors/send-medication-reminder-email.processor';
 import { SendAppointmentConfirmationProcessor } from './processors/send-appointment-confirmation.processor';
 import { SendPatientOnboardingWelcomeProcessor } from './processors/send-patient-onboarding-welcome.processor';
+import { SendApplicationStatusProcessor } from './processors/send-application-status.processor';
 import { MailQueueProcessor } from './processors/mail-queue.processor';
 import { NotificationsQueueProcessor } from './processors/notifications-queue.processor';
 import { AdminQueueProcessor } from './processors/admin-queue.processor';
@@ -80,6 +82,8 @@ import { MailModule } from 'src/modules/mail/mail.module';
     SendMedicationReminderEmailProcessor,
     SendAppointmentConfirmationProcessor,
     SendPatientOnboardingWelcomeProcessor,
+    SendApplicationStatusProcessor,
+    ApplicationReviewProcessor,
     MailQueueProcessor,
     NotificationsQueueProcessor,
     AdminQueueProcessor,

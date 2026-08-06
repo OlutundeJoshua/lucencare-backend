@@ -111,6 +111,9 @@ export enum NotificationType {
   HMO_LINK_REQUEST = 'hmo_link_request',
   MEDICATION_REMINDER = 'medication_reminder',
   REFILL_ALERT = 'refill_alert',
+  // A professional or benefactor application is awaiting review. The org-shaped
+  // equivalent is ORG_PENDING_VERIFICATION.
+  APPLICATION_PENDING_REVIEW = 'application_pending_review',
 }
 
 export enum AuditAction {
@@ -171,4 +174,24 @@ export enum AppointmentStatus {
 export enum AppointmentConfirmationAction {
   CREATED = 'created',
   RESCHEDULED = 'rescheduled',
+}
+
+/**
+ * The four roles whose accounts are gated behind admin approval, as the applicant
+ * sees themselves. Deliberately not UserRole: this keys the application-email copy
+ * table, and a Record<UserRole, ...> would force meaningless entries for patient,
+ * researcher and platform_admin.
+ */
+export enum ApplicantRole {
+  NGO = 'ngo',
+  HMO = 'hmo',
+  PROFESSIONAL = 'professional',
+  BENEFACTOR = 'benefactor',
+}
+
+/** The three points in an application's life at which we email the applicant. */
+export enum ApplicationEmailEvent {
+  RECEIVED = 'received',
+  APPROVED = 'approved',
+  REJECTED = 'rejected',
 }

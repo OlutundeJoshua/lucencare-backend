@@ -16,6 +16,9 @@ import { ConsentGrant } from 'src/modules/consents/entities/consent-grant.entity
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { Program } from 'src/modules/programs/entities/program.entity';
 import { Study } from 'src/modules/studies/entities/study.entity';
+import { User } from 'src/modules/auth/entities/user.entity';
+import { AuditService } from 'src/modules/audit/audit.service';
+import { NotificationsService } from 'src/modules/notifications/notifications.service';
 
 import { Enrollment } from './entities/enrollment.entity';
 import { StudyEnrollment } from './entities/study-enrollment.entity';
@@ -183,6 +186,13 @@ describe('EnrollmentsService', () => {
     create: jest.fn(),
     createQueryBuilder: jest.fn(),
   };
+  // Post-commit announcement deps: the NGO learns an application arrived. Default
+  // to "no programme / no staff" so existing tests take the early-return path.
+  const mockProgramRepo = { findOne: jest.fn().mockResolvedValue(null) };
+  const mockUserRepo = { find: jest.fn().mockResolvedValue([]) };
+  const mockAuditService = { log: jest.fn().mockResolvedValue(undefined) };
+  const mockNotificationsService = { createBulk: jest.fn().mockResolvedValue(undefined) };
+
   const mockPatientRepo = {
     findOne: jest.fn(),
     createQueryBuilder: jest.fn(),
@@ -198,9 +208,12 @@ describe('EnrollmentsService', () => {
         { provide: getRepositoryToken(Enrollment), useValue: mockEnrollmentRepo },
         { provide: getRepositoryToken(StudyEnrollment), useValue: mockStudyEnrollmentRepo },
         { provide: getRepositoryToken(Patient), useValue: mockPatientRepo },
-        { provide: getRepositoryToken(Program), useValue: {} },
+        { provide: getRepositoryToken(Program), useValue: mockProgramRepo },
         { provide: getRepositoryToken(Study), useValue: {} },
         { provide: getRepositoryToken(ConsentGrant), useValue: {} },
+        { provide: getRepositoryToken(User), useValue: mockUserRepo },
+        { provide: AuditService, useValue: mockAuditService },
+        { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: DataSource, useValue: mockDataSource },
       ],
     }).compile();
@@ -286,7 +299,11 @@ describe('EnrollmentsService', () => {
 
       const result = await service.createEnrollment(userId, dto);
       expect(result).toBe(saved);
-      expect(manager.query).toHaveBeenCalledWith('SET LOCAL "app.user_id" = $1', [patient.id]);
+      // set_config, not SET LOCAL: SET LOCAL cannot take a bind parameter.
+      expect(manager.query).toHaveBeenCalledWith(
+        `SELECT set_config('app.user_id', $1, true)`,
+        [patient.id],
+      );
     });
 
     it('throws 404 when patient profile not found', async () => {

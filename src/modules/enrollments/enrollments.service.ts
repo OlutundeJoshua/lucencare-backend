@@ -2,6 +2,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -9,19 +10,27 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 
 import {
+  AuditAction,
   ConsentPurpose,
   ConsentStatus,
   EnrollmentStatus,
+  LIVE_ENROLLMENT_STATUSES,
+  NotificationType,
   ProgramStatus,
   StudyEnrollmentStatus,
   StudyStatus,
+  UserRole,
 } from 'src/common/enums';
 import { SNAPSHOT_FIELDS } from 'src/common/constants/snapshot-fields';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { ConsentGrant } from 'src/modules/consents/entities/consent-grant.entity';
+import { Organization } from 'src/modules/organizations/entities/organization.entity';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { Program } from 'src/modules/programs/entities/program.entity';
 import { Study } from 'src/modules/studies/entities/study.entity';
+import { User } from 'src/modules/auth/entities/user.entity';
+import { AuditService } from 'src/modules/audit/audit.service';
+import { NotificationsService } from 'src/modules/notifications/notifications.service';
 
 import { Enrollment } from './entities/enrollment.entity';
 import { StudyEnrollment } from './entities/study-enrollment.entity';
@@ -35,6 +44,8 @@ const VALID_STUDY_TRANSITIONS: Partial<Record<StudyEnrollmentStatus, StudyEnroll
 
 @Injectable()
 export class EnrollmentsService {
+  private readonly logger = new Logger(EnrollmentsService.name);
+
   constructor(
     @InjectRepository(Enrollment)
     private readonly enrollmentRepo: Repository<Enrollment>,
@@ -45,6 +56,16 @@ export class EnrollmentsService {
     @InjectRepository(Patient)
     private readonly patientRepo: Repository<Patient>,
 
+    // Resolving the owning NGO's staff so they learn an application arrived.
+    @InjectRepository(Program)
+    private readonly programRepo: Repository<Program>,
+
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
+
+    private readonly auditService: AuditService,
+    private readonly notificationsService: NotificationsService,
+
     private readonly dataSource: DataSource,
   ) {}
 
@@ -53,8 +74,12 @@ export class EnrollmentsService {
     const patient = await this.patientRepo.findOne({ where: { id: patientId } });
     if (!patient) throw new NotFoundException('Patient profile not found');
 
-    return this.dataSource.transaction(async (manager) => {
-      await manager.query('SET LOCAL "app.user_id" = $1', [patientId]);
+    const saved = await this.dataSource.transaction(async (manager) => {
+      // set_config(..., true) is transaction-local — identical in effect to
+      // SET LOCAL, but SET LOCAL is not parameterisable: `SET LOCAL x = $1` is a
+      // Postgres syntax error, so the previous form threw on every call and took
+      // the whole request down with a 500.
+      await manager.query(`SELECT set_config('app.user_id', $1, true)`, [patientId]);
 
       const program = await manager
         .getRepository(Program)
@@ -79,12 +104,16 @@ export class EnrollmentsService {
         throw new UnprocessableEntityException('No active NGO_FUNDING consent grant');
       }
 
+      // Blocks any LIVE application (applied / selected / waitlisted), not just
+      // `active` — otherwise a selected patient could apply to the same programme a
+      // second time. Rejected, withdrawn and expired rows deliberately do not block,
+      // so someone turned down once may apply again if the programme reopens.
       const existing = await manager
         .getRepository(Enrollment)
         .createQueryBuilder('e')
         .where('e.patient_id = :patientId', { patientId })
         .andWhere('e.program_id = :programId', { programId: dto.programId })
-        .andWhere('e.status = :active', { active: EnrollmentStatus.ACTIVE })
+        .andWhere('e.status IN (:...live)', { live: [...LIVE_ENROLLMENT_STATUSES] })
         .andWhere('e.deleted_at IS NULL')
         .getOne();
       if (existing) {
@@ -101,6 +130,104 @@ export class EnrollmentsService {
       });
       return manager.getRepository(Enrollment).save(enrollment);
     });
+
+    // The application has committed. Everything below is notification, so a queue
+    // outage must not report failure for an enrollment that succeeded.
+    await this.announceApplication(saved, patientId);
+
+    return saved;
+  }
+
+  /**
+   * Tell the NGO an application arrived. Previously createEnrollment wrote one row
+   * and emitted nothing at all — no audit, no notification — so an applicant queue
+   * only got looked at if someone happened to open the tab.
+   */
+  private async announceApplication(enrollment: Enrollment, patientId: string): Promise<void> {
+    try {
+      await this.auditService.log({
+        actorId: patientId,
+        action: AuditAction.APPLICATION_SUBMITTED,
+        resourceId: enrollment.id,
+        resourceType: 'enrollment',
+        metadata: { programId: enrollment.programId },
+      });
+    } catch (err) {
+      this.logger.error(`Failed to audit enrollment ${enrollment.id}: ${(err as Error).message}`);
+    }
+
+    try {
+      const program = await this.programRepo.findOne({
+        where: { id: enrollment.programId },
+        select: ['id', 'orgId', 'title'],
+      });
+      if (!program) return;
+
+      const staff = await this.userRepo.find({
+        where: { orgId: program.orgId, role: UserRole.NGO_ADMIN },
+        select: ['id'],
+      });
+      if (staff.length === 0) return;
+
+      await this.notificationsService.createBulk(
+        staff.map((s) => s.id),
+        NotificationType.ENROLLMENT_APPLICATION,
+        {
+          enrollmentId: enrollment.id,
+          programId: program.id,
+          programTitle: program.title,
+        },
+      );
+    } catch (err) {
+      this.logger.error(
+        `Failed to notify NGO of enrollment ${enrollment.id}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Withdraw from ONE programme.
+   *
+   * Until now the only exit was revoking the whole NGO consent grant, which cascaded
+   * across every programme under it — a patient could not leave one without leaving
+   * all of them.
+   */
+  async withdrawEnrollment(id: string, userId: string): Promise<Enrollment> {
+    const patientId = await this.resolvePatientId(userId);
+
+    const enrollment = await this.enrollmentRepo.findOne({ where: { id } });
+    if (!enrollment) {
+      throw new NotFoundException(`Enrollment ${id} not found`);
+    }
+    if (enrollment.patientId !== patientId) {
+      throw new ForbiddenException('Access denied: this enrollment does not belong to you');
+    }
+    if (!LIVE_ENROLLMENT_STATUSES.includes(enrollment.status as never)) {
+      throw new ConflictException(`Cannot withdraw an enrollment that is ${enrollment.status}`);
+    }
+
+    const wasSelected = enrollment.status === EnrollmentStatus.SELECTED;
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(`SELECT set_config('app.user_id', $1, true)`, [patientId]);
+
+      await manager
+        .getRepository(Enrollment)
+        .update({ id }, { status: EnrollmentStatus.REVOKED_BY_PATIENT });
+
+      // Withdrawing after selection frees the place for someone else.
+      if (wasSelected) {
+        await manager
+          .getRepository(Program)
+          .createQueryBuilder()
+          .update()
+          .set({ slotsFilled: () => `GREATEST(0, "slots_filled" - 1)` })
+          .where('id = :programId', { programId: enrollment.programId })
+          .execute();
+      }
+    });
+
+    return this.enrollmentRepo.findOne({ where: { id } }) as Promise<Enrollment>;
   }
 
   async getEnrollment(id: string, userId: string): Promise<Enrollment> {
@@ -119,7 +246,11 @@ export class EnrollmentsService {
     if (!patient) throw new NotFoundException('Patient profile not found');
 
     return this.dataSource.transaction(async (manager) => {
-      await manager.query('SET LOCAL "app.user_id" = $1', [patientId]);
+      // set_config(..., true) is transaction-local — identical in effect to
+      // SET LOCAL, but SET LOCAL is not parameterisable: `SET LOCAL x = $1` is a
+      // Postgres syntax error, so the previous form threw on every call and took
+      // the whole request down with a 500.
+      await manager.query(`SELECT set_config('app.user_id', $1, true)`, [patientId]);
 
       const study = await manager
         .getRepository(Study)
@@ -178,14 +309,20 @@ export class EnrollmentsService {
     const qb = this.enrollmentRepo
       .createQueryBuilder('e')
       .leftJoin(Program, 'p', 'p.id = e.program_id')
+      .leftJoin(Organization, 'o', 'o.id = p.org_id')
       .select([
         'e.id AS id',
         'e.program_id AS "programId"',
         'e.status AS status',
         'e.created_at AS "createdAt"',
+        // The outcome of the NGO's review — what turns this list from "you applied"
+        // into "here is what happened". Null until someone reviews it.
+        'e.rejection_reason AS "rejectionReason"',
+        'e.reviewed_at AS "reviewedAt"',
         'p.title AS "programTitle"',
         'p.type AS "programType"',
         'p.expires_at AS "programExpiresAt"',
+        'o.name AS "orgName"',
       ])
       .where('e.patient_id = :patientId', { patientId })
       .andWhere('e.deleted_at IS NULL')

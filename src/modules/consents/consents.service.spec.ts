@@ -4,7 +4,13 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
 import { DataSource, OptimisticLockVersionMismatchError } from 'typeorm';
 
-import { ConsentPurpose, ConsentStatus, EnrollmentStatus, StudyEnrollmentStatus } from 'src/common/enums';
+import {
+  AuditAction,
+  ConsentPurpose,
+  ConsentStatus,
+  EnrollmentStatus,
+  StudyEnrollmentStatus,
+} from 'src/common/enums';
 import { SNAPSHOT_FIELDS } from 'src/common/constants/snapshot-fields';
 import { NOTIFICATIONS_QUEUE } from 'src/queues/queues.constants';
 import { AuditService } from 'src/modules/audit/audit.service';
@@ -279,13 +285,82 @@ describe('ConsentsService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
-    it('throws ConflictException for NOT_GRANTED → ACTIVE (invalid)', async () => {
-      const grant = makeGrant({ status: ConsentStatus.NOT_GRANTED });
+    // This previously asserted the transition threw — encoding as intended behaviour
+    // the very thing that made declining at onboarding permanent. A patient must be
+    // able to grant consent later; that is the whole point of a consent screen.
+    it('allows NOT_GRANTED → ACTIVE so a patient can grant consent after onboarding', async () => {
+      const grant = makeGrant({ status: ConsentStatus.NOT_GRANTED, grantedAt: undefined });
       mockConsentGrantRepo.findOne.mockResolvedValue(grant);
+      mockConsentGrantRepo.save.mockImplementation((g: ConsentGrant) => Promise.resolve(g));
 
-      await expect(
-        service.transition(GRANT_ID, USER_ID, { status: ConsentStatus.ACTIVE }),
-      ).rejects.toThrow(ConflictException);
+      const result = await service.transition(GRANT_ID, USER_ID, { status: ConsentStatus.ACTIVE });
+
+      expect(result.status).toBe(ConsentStatus.ACTIVE);
+    });
+
+    it('stamps grantedAt when consent is granted after onboarding', async () => {
+      const grant = makeGrant({ status: ConsentStatus.NOT_GRANTED, grantedAt: undefined });
+      mockConsentGrantRepo.findOne.mockResolvedValue(grant);
+      mockConsentGrantRepo.save.mockImplementation((g: ConsentGrant) => Promise.resolve(g));
+
+      const result = await service.transition(GRANT_ID, USER_ID, { status: ConsentStatus.ACTIVE });
+
+      expect(result.grantedAt).toEqual(expect.any(Date));
+    });
+
+    it('does not overwrite the original grantedAt when un-pausing', async () => {
+      const originalDate = new Date('2026-01-01T00:00:00.000Z');
+      const grant = makeGrant({ status: ConsentStatus.PAUSED, grantedAt: originalDate });
+      mockConsentGrantRepo.findOne.mockResolvedValue(grant);
+      mockConsentGrantRepo.save.mockImplementation((g: ConsentGrant) => Promise.resolve(g));
+
+      const result = await service.transition(GRANT_ID, USER_ID, { status: ConsentStatus.ACTIVE });
+
+      expect(result.grantedAt).toEqual(originalDate);
+    });
+
+    it('audits the state change', async () => {
+      const grant = makeGrant({ status: ConsentStatus.NOT_GRANTED, grantedAt: undefined });
+      mockConsentGrantRepo.findOne.mockResolvedValue(grant);
+      mockConsentGrantRepo.save.mockImplementation((g: ConsentGrant) => Promise.resolve(g));
+      mockAuditService.log.mockResolvedValue(undefined);
+
+      await service.transition(GRANT_ID, USER_ID, { status: ConsentStatus.ACTIVE });
+
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.CONSENT_CHANGE,
+          resourceId: GRANT_ID,
+          metadata: expect.objectContaining({
+            from: ConsentStatus.NOT_GRANTED,
+            to: ConsentStatus.ACTIVE,
+          }),
+        }),
+      );
+    });
+
+    // The only edge out of NOT_GRANTED — you cannot pause or revoke what was never given.
+    it.each([[ConsentStatus.PAUSED], [ConsentStatus.REVOKED]])(
+      'still rejects NOT_GRANTED → %s',
+      async (target) => {
+        const grant = makeGrant({ status: ConsentStatus.NOT_GRANTED });
+        mockConsentGrantRepo.findOne.mockResolvedValue(grant);
+
+        await expect(
+          service.transition(GRANT_ID, USER_ID, { status: target }),
+        ).rejects.toThrow(ConflictException);
+      },
+    );
+
+    it('a consent change that succeeds is not undone by an audit failure', async () => {
+      const grant = makeGrant({ status: ConsentStatus.NOT_GRANTED, grantedAt: undefined });
+      mockConsentGrantRepo.findOne.mockResolvedValue(grant);
+      mockConsentGrantRepo.save.mockImplementation((g: ConsentGrant) => Promise.resolve(g));
+      mockAuditService.log.mockRejectedValue(new Error('audit down'));
+
+      const result = await service.transition(GRANT_ID, USER_ID, { status: ConsentStatus.ACTIVE });
+
+      expect(result.status).toBe(ConsentStatus.ACTIVE);
     });
 
     it('throws NotFoundException when grant does not exist', async () => {
@@ -339,7 +414,11 @@ describe('ConsentsService', () => {
     it('executes all steps inside transaction and enqueues job', async () => {
       const result = await service.revokeAndCascade(GRANT_ID, PATIENT_ID);
 
-      expect(mockManager.query).toHaveBeenCalledWith('SET LOCAL "app.user_id" = $1', [PATIENT_ID]);
+      // set_config, not SET LOCAL: SET LOCAL cannot take a bind parameter.
+      expect(mockManager.query).toHaveBeenCalledWith(
+        `SELECT set_config('app.user_id', $1, true)`,
+        [PATIENT_ID],
+      );
       expect(mockManager.createQueryBuilder).toHaveBeenCalledTimes(3);
       expect(mockQueue.add).toHaveBeenCalledWith(
         'consent_revoked',

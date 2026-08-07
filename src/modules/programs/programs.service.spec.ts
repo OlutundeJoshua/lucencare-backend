@@ -7,12 +7,23 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
+import { DataSource } from 'typeorm';
 
-import { OrgStatus, OrgType, ProgramStatus, ProgramType } from 'src/common/enums';
-import { ADMIN_QUEUE, NOTIFICATIONS_QUEUE } from 'src/queues/queues.constants';
+import {
+  EnrollmentStatus,
+  OrgStatus,
+  OrgType,
+  ProgramStatus,
+  ProgramType,
+} from 'src/common/enums';
+import { ADMIN_QUEUE, MAIL_QUEUE, NOTIFICATIONS_QUEUE } from 'src/queues/queues.constants';
 import { Organization } from 'src/modules/organizations/entities/organization.entity';
 import { Enrollment } from 'src/modules/enrollments/entities/enrollment.entity';
+import { Patient } from 'src/modules/patients/entities/patient.entity';
+import { User } from 'src/modules/auth/entities/user.entity';
+import { AuditService } from 'src/modules/audit/audit.service';
 import { MatchingService } from 'src/modules/matching/matching.service';
+import { NotificationsService } from 'src/modules/notifications/notifications.service';
 
 import { Program } from './entities/program.entity';
 import { ProgramsService } from './programs.service';
@@ -48,12 +59,18 @@ function makeProgram(overrides: Partial<Program> = {}): Program {
   return Object.assign(p, overrides);
 }
 
+// select/addSelect/setParameters/innerJoin/getRawOne are here for getOrgStats, which
+// aggregates in SQL rather than fetching rows.
 const mockProgramQb = {
   where: jest.fn().mockReturnThis(),
   andWhere: jest.fn().mockReturnThis(),
   orderBy: jest.fn().mockReturnThis(),
   take: jest.fn().mockReturnThis(),
+  select: jest.fn().mockReturnThis(),
+  addSelect: jest.fn().mockReturnThis(),
+  setParameters: jest.fn().mockReturnThis(),
   getMany: jest.fn(),
+  getRawOne: jest.fn(),
 };
 
 const mockEnrollmentQb = {
@@ -61,13 +78,22 @@ const mockEnrollmentQb = {
   andWhere: jest.fn().mockReturnThis(),
   orderBy: jest.fn().mockReturnThis(),
   take: jest.fn().mockReturnThis(),
+  select: jest.fn().mockReturnThis(),
+  addSelect: jest.fn().mockReturnThis(),
+  innerJoin: jest.fn().mockReturnThis(),
+  leftJoin: jest.fn().mockReturnThis(),
+  groupBy: jest.fn().mockReturnThis(),
+  setParameters: jest.fn().mockReturnThis(),
   getMany: jest.fn(),
+  getRawOne: jest.fn(),
+  getRawMany: jest.fn(),
 };
 
 const mockProgramRepo = {
   findOne: jest.fn(),
   create: jest.fn(),
   save: jest.fn(),
+  update: jest.fn(),
   createQueryBuilder: jest.fn(() => mockProgramQb),
 };
 
@@ -76,7 +102,11 @@ const mockOrgRepo = {
 };
 
 const mockEnrollmentRepo = {
+  findOne: jest.fn(),
   createQueryBuilder: jest.fn(() => mockEnrollmentQb),
+  // The per-state top condition needs jsonb_array_elements_text, which the builder
+  // cannot express — that one aggregate is a parameterised raw query.
+  query: jest.fn(),
 };
 
 const mockMatchingService = {
@@ -86,6 +116,33 @@ const mockMatchingService = {
 
 const mockAdminQueue = { add: jest.fn() };
 const mockNotificationsQueue = { add: jest.fn() };
+const mockMailQueue = { add: jest.fn() };
+
+// reviewEnrollment resolves the applicant's email for the outcome notice.
+const mockPatientRepo = { findOne: jest.fn() };
+const mockUserRepo = { findOne: jest.fn() };
+const mockAuditService = { log: jest.fn() };
+// The outcome reaches the patient in-app as well as by email.
+const mockNotificationsService = { createOne: jest.fn() };
+
+// The review moves the decision and the slot counter together.
+const mockTxProgramQb = {
+  update: jest.fn().mockReturnThis(),
+  set: jest.fn().mockReturnThis(),
+  where: jest.fn().mockReturnThis(),
+  execute: jest.fn().mockResolvedValue({ affected: 1 }),
+};
+const mockTxEnrollmentUpdate = jest.fn().mockResolvedValue({ affected: 1 });
+const mockDataSource = {
+  transaction: jest.fn((cb: (m: unknown) => Promise<unknown>) =>
+    cb({
+      getRepository: (entity: { name: string }) =>
+        entity.name === 'Program'
+          ? { createQueryBuilder: () => mockTxProgramQb }
+          : { update: mockTxEnrollmentUpdate },
+    }),
+  ),
+};
 
 describe('ProgramsService', () => {
   let service: ProgramsService;
@@ -100,6 +157,12 @@ describe('ProgramsService', () => {
         { provide: MatchingService, useValue: mockMatchingService },
         { provide: getQueueToken(ADMIN_QUEUE), useValue: mockAdminQueue },
         { provide: getQueueToken(NOTIFICATIONS_QUEUE), useValue: mockNotificationsQueue },
+        { provide: getQueueToken(MAIL_QUEUE), useValue: mockMailQueue },
+        { provide: getRepositoryToken(Patient), useValue: mockPatientRepo },
+        { provide: getRepositoryToken(User), useValue: mockUserRepo },
+        { provide: AuditService, useValue: mockAuditService },
+        { provide: NotificationsService, useValue: mockNotificationsService },
+        { provide: DataSource, useValue: mockDataSource },
       ],
     }).compile();
 
@@ -113,6 +176,15 @@ describe('ProgramsService', () => {
     mockEnrollmentQb.andWhere.mockReturnThis();
     mockEnrollmentQb.orderBy.mockReturnThis();
     mockEnrollmentQb.take.mockReturnThis();
+    mockProgramQb.select.mockReturnThis();
+    mockProgramQb.addSelect.mockReturnThis();
+    mockProgramQb.setParameters.mockReturnThis();
+    mockEnrollmentQb.select.mockReturnThis();
+    mockEnrollmentQb.addSelect.mockReturnThis();
+    mockEnrollmentQb.innerJoin.mockReturnThis();
+    mockEnrollmentQb.leftJoin.mockReturnThis();
+    mockEnrollmentQb.groupBy.mockReturnThis();
+    mockEnrollmentQb.setParameters.mockReturnThis();
   });
 
   // ---------------------------------------------------------------------------
@@ -466,6 +538,485 @@ describe('ProgramsService', () => {
       await expect(service.updateStatus(PROGRAM_ID, ProgramStatus.APPROVED)).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+  // The two status axes must stay separate: `status` is the platform review state,
+  // `lifecycle` is the operational one. A programme can be approved AND full.
+  describe('derived lifecycle', () => {
+    const DAY = 86_400_000;
+
+    async function lifecycleFor(overrides: Partial<Program>): Promise<string> {
+      mockProgramRepo.findOne.mockResolvedValue(makeProgram(overrides));
+      const view = await service.getForOrg(PROGRAM_ID, ORG_ID);
+      return view.lifecycle;
+    }
+
+    it('reads Draft while still awaiting platform review', async () => {
+      expect(await lifecycleFor({ status: ProgramStatus.PENDING_REVIEW })).toBe('Draft');
+    });
+
+    it('reads Active when approved with room and time left', async () => {
+      expect(
+        await lifecycleFor({
+          status: ProgramStatus.APPROVED,
+          expiresAt: new Date(Date.now() + 60 * DAY),
+          slotsTotal: 50,
+          slotsFilled: 10,
+        }),
+      ).toBe('Active');
+    });
+
+    it('reads Closing inside the final fortnight', async () => {
+      expect(
+        await lifecycleFor({
+          status: ProgramStatus.APPROVED,
+          expiresAt: new Date(Date.now() + 3 * DAY),
+          slotsTotal: 50,
+          slotsFilled: 10,
+        }),
+      ).toBe('Closing');
+    });
+
+    it('reads Full once every place is taken', async () => {
+      expect(
+        await lifecycleFor({
+          status: ProgramStatus.APPROVED,
+          expiresAt: new Date(Date.now() + 60 * DAY),
+          slotsTotal: 20,
+          slotsFilled: 20,
+        }),
+      ).toBe('Full');
+    });
+
+    // Pausing is deliberate; being full is a consequence. The deliberate act wins.
+    it('reads Paused even when also full', async () => {
+      expect(
+        await lifecycleFor({
+          status: ProgramStatus.APPROVED,
+          expiresAt: new Date(Date.now() + 60 * DAY),
+          slotsTotal: 20,
+          slotsFilled: 20,
+          pausedAt: new Date(),
+        }),
+      ).toBe('Paused');
+    });
+
+    it('reads Expired once past its date, whatever else is true', async () => {
+      expect(
+        await lifecycleFor({
+          status: ProgramStatus.APPROVED,
+          expiresAt: new Date(Date.now() - DAY),
+          pausedAt: new Date(),
+        }),
+      ).toBe('Expired');
+    });
+
+    it('treats an uncapped programme as never full', async () => {
+      expect(
+        await lifecycleFor({
+          status: ProgramStatus.APPROVED,
+          expiresAt: new Date(Date.now() + 60 * DAY),
+          slotsTotal: undefined,
+          slotsFilled: 0,
+        }),
+      ).toBe('Active');
+    });
+
+    it('never reports negative places remaining', async () => {
+      mockProgramRepo.findOne.mockResolvedValue(
+        makeProgram({ slotsTotal: 5, slotsFilled: 9 }),
+      );
+      const view = await service.getForOrg(PROGRAM_ID, ORG_ID);
+      expect(view.slotsAvailable).toBe(0);
+    });
+  });
+
+  describe('update', () => {
+    beforeEach(() => {
+      mockProgramRepo.update.mockResolvedValue({ affected: 1 });
+    });
+
+    function existing(overrides: Partial<Program> = {}) {
+      const program = makeProgram({ status: ProgramStatus.APPROVED, ...overrides });
+      mockProgramRepo.findOne.mockResolvedValue(program);
+      return program;
+    }
+
+    it('applies only the fields supplied', async () => {
+      existing();
+      await service.update(PROGRAM_ID, ORG_ID, { title: 'Renamed' });
+
+      const [, patch] = mockProgramRepo.update.mock.calls[0];
+      expect(patch).toEqual({ title: 'Renamed' });
+    });
+
+    it('pausing stamps pausedAt', async () => {
+      existing();
+      await service.update(PROGRAM_ID, ORG_ID, { paused: true });
+
+      const [, patch] = mockProgramRepo.update.mock.calls[0];
+      expect(patch.pausedAt).toEqual(expect.any(Date));
+    });
+
+    // undefined would mean "leave unchanged" to TypeORM, making Resume a no-op.
+    it('resuming writes an explicit null, not undefined', async () => {
+      existing({ pausedAt: new Date() });
+      await service.update(PROGRAM_ID, ORG_ID, { paused: false });
+
+      const [, patch] = mockProgramRepo.update.mock.calls[0];
+      expect(patch.pausedAt).toBeNull();
+    });
+
+    it('refuses to cut capacity below places already filled', async () => {
+      existing({ slotsTotal: 50, slotsFilled: 30 });
+
+      await expect(
+        service.update(PROGRAM_ID, ORG_ID, { slotsTotal: 10 }),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(mockProgramRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('allows cutting capacity down to exactly what is filled', async () => {
+      existing({ slotsTotal: 50, slotsFilled: 30 });
+      await expect(
+        service.update(PROGRAM_ID, ORG_ID, { slotsTotal: 30 }),
+      ).resolves.toBeDefined();
+    });
+
+    it('refuses to cut the budget below what is already disbursed', async () => {
+      existing({ budgetTotal: 1_000_000, budgetDisbursed: 400_000 });
+
+      await expect(
+        service.update(PROGRAM_ID, ORG_ID, { budgetTotal: 100_000 }),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    });
+
+    it('refuses an expiry in the past', async () => {
+      existing();
+      await expect(
+        service.update(PROGRAM_ID, ORG_ID, { expiresAt: PAST_DATE }),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    });
+
+    it('403s on another organisation\'s programme, before writing anything', async () => {
+      mockProgramRepo.findOne.mockResolvedValue(makeProgram({ orgId: 'OTHERORG' }));
+
+      await expect(
+        service.update(PROGRAM_ID, ORG_ID, { title: 'Hijacked' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockProgramRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('404s on a programme that does not exist', async () => {
+      mockProgramRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.update(PROGRAM_ID, ORG_ID, { title: 'Ghost' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('skips the write entirely for an empty patch', async () => {
+      existing();
+      await service.update(PROGRAM_ID, ORG_ID, {});
+      expect(mockProgramRepo.update).not.toHaveBeenCalled();
+    });
+  });
+  // Slot accounting is the substantive part: SELECTED occupies a place, everything
+  // else releases it, and both move with the decision in one transaction.
+  describe('reviewEnrollment', () => {
+    const ENR_ID = ENROLLMENT_ID;
+    const REVIEWER = '01HZZZZZZZZZZZZZZZZZZZREV';
+
+    function setup(
+      programOverrides: Partial<Program> = {},
+      enrollmentStatus = EnrollmentStatus.ACTIVE,
+    ) {
+      mockProgramRepo.findOne.mockResolvedValue(
+        makeProgram({ status: ProgramStatus.APPROVED, slotsTotal: 50, slotsFilled: 10, ...programOverrides }),
+      );
+      mockEnrollmentRepo.findOne.mockResolvedValue({
+        id: ENR_ID,
+        programId: PROGRAM_ID,
+        patientId: '01HZZZZZZZZZZZZZZZZZZZZPAT',
+        status: enrollmentStatus,
+        sharedDataSnapshot: { name: 'Ada' },
+        createdAt: new Date(),
+      });
+      mockPatientRepo.findOne.mockResolvedValue(null); // skips the email lookup
+    }
+
+    /** The relative SQL the slot counter is moved with, if it moved at all. */
+    function slotSql(): string | undefined {
+      if (!mockTxProgramQb.set.mock.calls.length) return undefined;
+      const setter = mockTxProgramQb.set.mock.calls[0][0].slotsFilled;
+      return typeof setter === 'function' ? setter() : String(setter);
+    }
+
+    it('records the decision and stamps the reviewer', async () => {
+      setup();
+      await service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+        status: EnrollmentStatus.SELECTED,
+      });
+
+      const [, patch] = mockTxEnrollmentUpdate.mock.calls[0];
+      expect(patch.status).toBe(EnrollmentStatus.SELECTED);
+      expect(patch.reviewedBy).toBe(REVIEWER);
+      expect(patch.reviewedAt).toEqual(expect.any(Date));
+    });
+
+    it('selecting takes a place', async () => {
+      setup();
+      await service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+        status: EnrollmentStatus.SELECTED,
+      });
+      expect(slotSql()).toContain('+ 1');
+    });
+
+    it('un-selecting gives the place back', async () => {
+      setup({}, EnrollmentStatus.SELECTED);
+      await service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+        status: EnrollmentStatus.REJECTED,
+        reason: 'No longer eligible',
+      });
+      expect(slotSql()).toContain('- 1');
+    });
+
+    it('waitlisting an applicant who never held a place moves no counter', async () => {
+      setup();
+      await service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+        status: EnrollmentStatus.WAITLISTED,
+      });
+      expect(slotSql()).toBeUndefined();
+    });
+
+    // A relative update, so two reviewers acting at once cannot clobber each other.
+    it('moves the counter relatively, never to a computed absolute', async () => {
+      setup();
+      await service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+        status: EnrollmentStatus.SELECTED,
+      });
+      expect(slotSql()).toContain('slots_filled');
+      expect(slotSql()).toContain('GREATEST(0');
+    });
+
+    it('refuses to select into a full programme', async () => {
+      setup({ slotsTotal: 20, slotsFilled: 20 });
+
+      await expect(
+        service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+          status: EnrollmentStatus.SELECTED,
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(mockTxEnrollmentUpdate).not.toHaveBeenCalled();
+    });
+
+    it('still allows rejecting when the programme is full', async () => {
+      setup({ slotsTotal: 20, slotsFilled: 20 });
+      await expect(
+        service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+          status: EnrollmentStatus.REJECTED,
+          reason: 'Out of scope',
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    it('clears a stale reason when a rejection is reversed', async () => {
+      setup({}, EnrollmentStatus.REJECTED);
+      await service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+        status: EnrollmentStatus.SELECTED,
+      });
+
+      const [, patch] = mockTxEnrollmentUpdate.mock.calls[0];
+      expect(patch.rejectionReason).toBeNull();
+    });
+
+    it('audits the decision', async () => {
+      setup();
+      await service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+        status: EnrollmentStatus.REJECTED,
+        reason: 'Income above threshold',
+      });
+
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorId: REVIEWER,
+          resourceId: ENR_ID,
+          resourceType: 'enrollment',
+        }),
+      );
+    });
+
+    // These two outcomes belong to the patient and the system.
+    it.each([[EnrollmentStatus.REVOKED_BY_PATIENT], [EnrollmentStatus.EXPIRED]])(
+      'refuses to review an enrollment that is %s',
+      async (status) => {
+        setup({}, status);
+        await expect(
+          service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+            status: EnrollmentStatus.SELECTED,
+          }),
+        ).rejects.toBeInstanceOf(ConflictException);
+      },
+    );
+
+    it('refuses a no-op re-decision', async () => {
+      setup({}, EnrollmentStatus.SELECTED);
+      await expect(
+        service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+          status: EnrollmentStatus.SELECTED,
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('404s when the enrollment belongs to a different programme', async () => {
+      mockProgramRepo.findOne.mockResolvedValue(makeProgram({ status: ProgramStatus.APPROVED }));
+      mockEnrollmentRepo.findOne.mockResolvedValue({ id: ENR_ID, programId: 'OTHERPROGRAM' });
+
+      await expect(
+        service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+          status: EnrollmentStatus.SELECTED,
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it("403s on another organisation's programme, before writing anything", async () => {
+      mockProgramRepo.findOne.mockResolvedValue(makeProgram({ orgId: 'OTHERORG' }));
+
+      await expect(
+        service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+          status: EnrollmentStatus.SELECTED,
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockTxEnrollmentUpdate).not.toHaveBeenCalled();
+    });
+
+    // The decision has committed; a queue outage must not report failure for it,
+    // or the reviewer retries into a 409 "already selected".
+    it('still succeeds when the applicant email cannot be queued', async () => {
+      setup();
+      mockPatientRepo.findOne.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        service.reviewEnrollment(PROGRAM_ID, ENR_ID, ORG_ID, REVIEWER, {
+          status: EnrollmentStatus.SELECTED,
+        }),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // getOrgStats
+  // ---------------------------------------------------------------------------
+  describe('getOrgStats', () => {
+    function setupRaw(
+      program: Record<string, string> = {},
+      enrollment: Record<string, string> = {},
+    ) {
+      mockProgramQb.getRawOne.mockResolvedValue({
+        totalPrograms: '4',
+        activePrograms: '2',
+        budgetTotal: '1850000000',
+        budgetDisbursed: '1120000000',
+        slotsTotal: '90',
+        slotsFilled: '52',
+        ...program,
+      });
+      mockEnrollmentQb.getRawOne.mockResolvedValue({
+        totalApplicants: '31',
+        pendingReview: '7',
+        selectedPatients: '18',
+        waitlisted: '4',
+        rejected: '2',
+        ...enrollment,
+      });
+    }
+
+    it('returns numbers, not the strings Postgres sends for COUNT and SUM', async () => {
+      setupRaw();
+
+      const stats = await service.getOrgStats(ORG_ID);
+
+      expect(stats).toEqual({
+        activePrograms: 2,
+        totalPrograms: 4,
+        totalApplicants: 31,
+        pendingReview: 7,
+        selectedPatients: 18,
+        waitlisted: 4,
+        rejected: 2,
+        budgetTotal: 1_850_000_000,
+        budgetDisbursed: 1_120_000_000,
+        slotsTotal: 90,
+        slotsFilled: 52,
+      });
+    });
+
+    it('scopes both aggregates to the organisation', async () => {
+      setupRaw();
+
+      await service.getOrgStats(ORG_ID);
+
+      expect(mockProgramQb.where).toHaveBeenCalledWith('p.org_id = :orgId', { orgId: ORG_ID });
+      // Enrollments are reached through the org's own programmes, never the patients table.
+      expect(mockEnrollmentQb.innerJoin).toHaveBeenCalled();
+      expect(mockEnrollmentQb.where).toHaveBeenCalledWith('p.org_id = :orgId', { orgId: ORG_ID });
+    });
+
+    // A brand-new NGO must read as zeros, not NaN on the dashboard.
+    it('reads as zeros for an organisation with nothing yet', async () => {
+      mockProgramQb.getRawOne.mockResolvedValue(undefined);
+      mockEnrollmentQb.getRawOne.mockResolvedValue(undefined);
+
+      const stats = await service.getOrgStats(ORG_ID);
+
+      expect(Object.values(stats).every((v) => v === 0)).toBe(true);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // getPatientMap
+  // ---------------------------------------------------------------------------
+  describe('getPatientMap', () => {
+    beforeEach(() => {
+      mockEnrollmentQb.getRawMany.mockResolvedValue([
+        { state: 'Lagos', selected: '8', inReview: '3', waitlisted: '1', total: '12' },
+        { state: 'Unspecified', selected: '1', inReview: '2', waitlisted: '0', total: '3' },
+      ]);
+      mockEnrollmentRepo.query.mockResolvedValue([
+        { state: 'Lagos', tag: 'Hypertension' },
+      ]);
+    });
+
+    it('returns per-state counts as numbers, with the top condition attached', async () => {
+      const rows = await service.getPatientMap(ORG_ID);
+
+      expect(rows[0]).toEqual({
+        state: 'Lagos',
+        selected: 8,
+        inReview: 3,
+        waitlisted: 1,
+        total: 12,
+        topCondition: 'Hypertension',
+      });
+    });
+
+    // Patients who onboarded before the location columns existed must still be counted.
+    it('keeps unlocated applicants in an Unspecified row rather than dropping them', async () => {
+      const rows = await service.getPatientMap(ORG_ID);
+
+      const unspecified = rows.find((r) => r.state === 'Unspecified');
+      expect(unspecified?.total).toBe(3);
+      expect(unspecified?.topCondition).toBeUndefined();
+    });
+
+    it('scopes to the organisation and never selects a patient row', async () => {
+      await service.getPatientMap(ORG_ID);
+
+      expect(mockEnrollmentQb.where).toHaveBeenCalledWith('p.org_id = :orgId', { orgId: ORG_ID });
+      const selected = mockEnrollmentQb.select.mock.calls.flat().join(' ');
+      expect(selected).toContain('location_state');
+      expect(selected).not.toContain('pat.id');
+      expect(selected).not.toContain('patient_id');
     });
   });
 });

@@ -64,6 +64,23 @@ export class UpdatePatientDto {
 
   @ApiPropertyOptional() @IsOptional() @IsString() address?: string;
 
+  /**
+   * Structured location. Editable here so a patient who onboarded before these
+   * columns existed is not permanently unlocatable — without an edit path, the
+   * coverage map would only ever cover new sign-ups.
+   */
+  @ApiPropertyOptional({ description: 'State or region, e.g. "Lagos"' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  locationState?: string;
+
+  @ApiPropertyOptional({ description: 'Local government area' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  locationLga?: string;
+
   @ApiPropertyOptional({ type: [MedicationItemDto] })
   @IsOptional()
   @ValidateNested({ each: true })

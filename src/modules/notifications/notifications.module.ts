@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/notifications.md
-
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 

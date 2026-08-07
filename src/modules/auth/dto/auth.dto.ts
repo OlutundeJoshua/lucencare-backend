@@ -12,6 +12,7 @@ import {
   IsUrl,
   Equals,
   Length,
+  MaxLength,
   MinLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -139,6 +140,23 @@ export class PatientOnboardingDto {
   biologicalSex?: string;
 
   @ApiPropertyOptional() @IsOptional() @IsString() country?: string;
+
+  /**
+   * Optional so the wizard can collect it only where it means something (the state
+   * list is Nigeria-shaped), and so an existing client that does not send it still
+   * completes onboarding. Editable afterwards via PATCH /patients/me.
+   */
+  @ApiPropertyOptional({ description: 'State or region, e.g. "Lagos"' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  locationState?: string;
+
+  @ApiPropertyOptional({ description: 'Local government area' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  locationLga?: string;
 
   @ApiPropertyOptional({ description: 'Comma-separated conditions e.g. "Diabetes, Hypertension"' })
   @IsOptional()

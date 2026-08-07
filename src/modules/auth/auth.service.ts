@@ -485,6 +485,8 @@ export class AuthService {
         dateOfBirth: dto.dateOfBirth,
         gender: dto.biologicalSex ? (genderMap[dto.biologicalSex] as any) : undefined,
         country: dto.country,
+        locationState: dto.locationState,
+        locationLga: dto.locationLga,
         primaryLanguage: dto.primaryLanguage,
         conditionTags,
       });

@@ -99,6 +99,8 @@ export class PatientsService {
     if (dto.dateOfBirth !== undefined) updates.dateOfBirth = dto.dateOfBirth;
     if (dto.gender !== undefined) updates.gender = dto.gender;
     if (dto.address !== undefined) updates.address = dto.address;
+    if (dto.locationState !== undefined) updates.locationState = dto.locationState;
+    if (dto.locationLga !== undefined) updates.locationLga = dto.locationLga;
     if (dto.medicationList !== undefined) updates.medicationList = dto.medicationList as object[];
     if (dto.directContactShared !== undefined) updates.directContactShared = dto.directContactShared;
 

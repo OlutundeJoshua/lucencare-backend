@@ -18,13 +18,20 @@ import { MatchingService } from './matching.service';
 export class MatchingController {
   constructor(private readonly matchingService: MatchingService) {}
 
+  // Both handlers reshape { data, nextCursor } into the { data, meta } envelope the
+  // TransformInterceptor unwraps. Returning the service result directly produced a
+  // double-wrapped { data: { data: [...] } } body — the same defect already fixed on
+  // three programs routes.
+
   @Get('funding')
-  getFundingRecommendations(@Query() query: PaginationDto, @CurrentUser() user: JwtPayload) {
-    return this.matchingService.findMatchingPrograms(user.sub, query);
+  async getFundingRecommendations(@Query() query: PaginationDto, @CurrentUser() user: JwtPayload) {
+    const { data, nextCursor } = await this.matchingService.findMatchingPrograms(user.sub, query);
+    return { data, meta: { cursor: nextCursor, limit: query.limit } };
   }
 
   @Get('studies')
-  getStudyRecommendations(@Query() query: PaginationDto, @CurrentUser() user: JwtPayload) {
-    return this.matchingService.findStudies(user.sub, query);
+  async getStudyRecommendations(@Query() query: PaginationDto, @CurrentUser() user: JwtPayload) {
+    const { data, nextCursor } = await this.matchingService.findStudies(user.sub, query);
+    return { data, meta: { cursor: nextCursor, limit: query.limit } };
   }
 }

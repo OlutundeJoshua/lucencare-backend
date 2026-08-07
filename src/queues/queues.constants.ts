@@ -28,6 +28,9 @@ export const SEND_PATIENT_ONBOARDING_WELCOME_JOB = 'send_patient_onboarding_welc
 // Covers all three application lifecycle emails (received / approved / rejected) for
 // the four roles gated behind admin approval — see ApplicationEmailEvent.
 export const SEND_APPLICATION_STATUS_JOB = 'send_application_status';
+// Tells a patient the outcome of a programme application. Distinct from
+// SEND_APPLICATION_STATUS_JOB, which is about an *account* being approved.
+export const SEND_ENROLLMENT_OUTCOME_JOB = 'send_enrollment_outcome';
 
 export const NOTIFICATION_FAN_OUT_BATCH_SIZE = 200;
 export const MEDICATION_REFILL_CHECK_CRON = '0 7 * * *';

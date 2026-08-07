@@ -32,6 +32,7 @@ import { SendMedicationReminderEmailProcessor } from './processors/send-medicati
 import { SendAppointmentConfirmationProcessor } from './processors/send-appointment-confirmation.processor';
 import { SendPatientOnboardingWelcomeProcessor } from './processors/send-patient-onboarding-welcome.processor';
 import { SendApplicationStatusProcessor } from './processors/send-application-status.processor';
+import { SendEnrollmentOutcomeProcessor } from './processors/send-enrollment-outcome.processor';
 import { MailQueueProcessor } from './processors/mail-queue.processor';
 import { NotificationsQueueProcessor } from './processors/notifications-queue.processor';
 import { AdminQueueProcessor } from './processors/admin-queue.processor';
@@ -83,6 +84,7 @@ import { MailModule } from 'src/modules/mail/mail.module';
     SendAppointmentConfirmationProcessor,
     SendPatientOnboardingWelcomeProcessor,
     SendApplicationStatusProcessor,
+    SendEnrollmentOutcomeProcessor,
     ApplicationReviewProcessor,
     MailQueueProcessor,
     NotificationsQueueProcessor,

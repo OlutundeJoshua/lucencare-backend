@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, Post, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { PaginationDto } from 'src/common/dto/pagination.dto';
@@ -29,6 +29,12 @@ export class EnrollmentsController {
   @Post()
   create(@Body() dto: CreateEnrollmentDto, @CurrentUser() user: JwtPayload) {
     return this.enrollmentsService.createEnrollment(user.sub, dto);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Withdraw from one programme' })
+  withdraw(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.enrollmentsService.withdrawEnrollment(id, user.sub);
   }
 
   @Get(':id')

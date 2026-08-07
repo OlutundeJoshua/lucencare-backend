@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/patients.md
-
 import { Entity, Column, Index } from 'typeorm';
 
 import { BaseEntity } from 'src/common/entities/base.entity';
@@ -45,6 +43,23 @@ export class Patient extends BaseEntity {
 
   @Column({ name: 'country', type: 'varchar', length: 10, nullable: true })
   country?: string;
+
+  /**
+   * Structured location, collected from the onboarding wizard and editable later.
+   *
+   * Deliberately absent from SNAPSHOT_FIELDS: buildSnapshot reads that constant rather
+   * than the grant's stored dataScopes, so widening it would retroactively capture
+   * location for every patient who consented under the narrower list. Organisations
+   * receive counts per state, never a patient's state.
+   *
+   * Nullable because every patient who onboarded before this column existed has none,
+   * and free-text `address` cannot be reliably parsed into one.
+   */
+  @Column({ name: 'location_state', type: 'text', nullable: true })
+  locationState?: string;
+
+  @Column({ name: 'location_lga', type: 'text', nullable: true })
+  locationLga?: string;
 
   @Column({ name: 'primary_language', type: 'varchar', length: 10, nullable: true })
   primaryLanguage?: string;

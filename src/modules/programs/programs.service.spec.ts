@@ -10,12 +10,14 @@ import { getQueueToken } from '@nestjs/bullmq';
 import { DataSource } from 'typeorm';
 
 import {
+  AuditAction,
   EnrollmentStatus,
   OrgStatus,
   OrgType,
   ProgramStatus,
   ProgramType,
 } from 'src/common/enums';
+import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { ADMIN_QUEUE, MAIL_QUEUE, NOTIFICATIONS_QUEUE } from 'src/queues/queues.constants';
 import { Organization } from 'src/modules/organizations/entities/organization.entity';
 import { Enrollment } from 'src/modules/enrollments/entities/enrollment.entity';
@@ -71,6 +73,10 @@ const mockProgramQb = {
   setParameters: jest.fn().mockReturnThis(),
   getMany: jest.fn(),
   getRawOne: jest.fn(),
+  // findAllForAdmin joins the organisation and reads raw rows.
+  leftJoin: jest.fn().mockReturnThis(),
+  limit: jest.fn().mockReturnThis(),
+  getRawMany: jest.fn(),
 };
 
 const mockEnrollmentQb = {
@@ -199,24 +205,25 @@ describe('ProgramsService', () => {
       expiresAt: FUTURE_DATE,
     };
 
-    it('creates and returns program with PENDING_REVIEW status', async () => {
+    it('creates the programme as a DRAFT, not a submission', async () => {
       const org = makeOrg();
-      const program = makeProgram({ status: ProgramStatus.PENDING_REVIEW });
+      const program = makeProgram({ status: ProgramStatus.DRAFT });
       mockOrgRepo.findOne.mockResolvedValue(org);
       mockProgramRepo.create.mockReturnValue(program);
       mockProgramRepo.save.mockResolvedValue(program);
-      mockAdminQueue.add.mockResolvedValue(undefined);
 
       const result = await service.create(ORG_ID, dto);
 
       expect(mockProgramRepo.create).toHaveBeenCalledWith(
-        expect.objectContaining({ orgId: ORG_ID, status: ProgramStatus.PENDING_REVIEW }),
+        expect.objectContaining({ orgId: ORG_ID, status: ProgramStatus.DRAFT }),
       );
       expect(mockProgramRepo.save).toHaveBeenCalledWith(program);
-      expect(result.status).toBe(ProgramStatus.PENDING_REVIEW);
+      expect(result.status).toBe(ProgramStatus.DRAFT);
     });
 
-    it('enqueues program_review job after creation', async () => {
+    // Creating is no longer submitting: the NGO edits the draft first, and
+    // submitForReview is what hands it to the platform.
+    it('does not alert the admins on creation', async () => {
       const org = makeOrg();
       const program = makeProgram();
       mockOrgRepo.findOne.mockResolvedValue(org);
@@ -226,10 +233,7 @@ describe('ProgramsService', () => {
 
       await service.create(ORG_ID, dto);
 
-      expect(mockAdminQueue.add).toHaveBeenCalledWith(
-        'program_review',
-        expect.objectContaining({ programId: program.id, orgId: ORG_ID }),
-      );
+      expect(mockAdminQueue.add).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when org not found', async () => {
@@ -551,8 +555,18 @@ describe('ProgramsService', () => {
       return view.lifecycle;
     }
 
-    it('reads Draft while still awaiting platform review', async () => {
-      expect(await lifecycleFor({ status: ProgramStatus.PENDING_REVIEW })).toBe('Draft');
+    // One label per review state. All three used to collapse into 'Draft', which
+    // left an NGO unable to tell "waiting on the platform" from "rejected".
+    it('reads Draft before it has been submitted', async () => {
+      expect(await lifecycleFor({ status: ProgramStatus.DRAFT })).toBe('Draft');
+    });
+
+    it('reads In review once submitted', async () => {
+      expect(await lifecycleFor({ status: ProgramStatus.PENDING_REVIEW })).toBe('In review');
+    });
+
+    it('reads Not approved after a rejection', async () => {
+      expect(await lifecycleFor({ status: ProgramStatus.REJECTED })).toBe('Not approved');
     });
 
     it('reads Active when approved with room and time left', async () => {
@@ -631,13 +645,289 @@ describe('ProgramsService', () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // submitForReview — the step that used to be implicit in create()
+  // ---------------------------------------------------------------------------
+  describe('submitForReview', () => {
+    const ACTOR = '01HZZZZZZZZZZZZZZZZZZZUSR';
+
+    function pending(overrides: Partial<Program> = {}) {
+      const program = makeProgram({ status: ProgramStatus.DRAFT, ...overrides });
+      mockProgramRepo.findOne.mockResolvedValue(program);
+      mockProgramRepo.update.mockResolvedValue({ affected: 1 });
+      return program;
+    }
+
+    it('hands a draft to the platform and alerts the admins', async () => {
+      pending();
+
+      const view = await service.submitForReview(PROGRAM_ID, ORG_ID, ACTOR);
+
+      const [, patch] = mockProgramRepo.update.mock.calls[0];
+      expect(patch.status).toBe(ProgramStatus.PENDING_REVIEW);
+      expect(mockAdminQueue.add).toHaveBeenCalledWith(
+        'program_review',
+        expect.objectContaining({ programId: PROGRAM_ID, orgId: ORG_ID }),
+      );
+      expect(view).toBeDefined();
+    });
+
+    // Rejection was terminal: nothing could move it back to a reviewable state.
+    it('resubmits a rejected programme and clears the stale reason', async () => {
+      pending({ status: ProgramStatus.REJECTED, rejectionReason: 'Eligibility too broad' });
+
+      await service.submitForReview(PROGRAM_ID, ORG_ID, ACTOR);
+
+      const [, patch] = mockProgramRepo.update.mock.calls[0];
+      expect(patch).toEqual(
+        expect.objectContaining({
+          status: ProgramStatus.PENDING_REVIEW,
+          rejectionReason: null,
+          reviewedAt: null,
+          reviewedBy: null,
+        }),
+      );
+    });
+
+    it('audits the submission', async () => {
+      pending();
+
+      await service.submitForReview(PROGRAM_ID, ORG_ID, ACTOR);
+
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorId: ACTOR,
+          action: AuditAction.APPLICATION_SUBMITTED,
+          resourceType: 'program',
+        }),
+      );
+    });
+
+    it.each([
+      [ProgramStatus.PENDING_REVIEW],
+      [ProgramStatus.APPROVED],
+      [ProgramStatus.EXPIRED],
+    ])('409s when the programme is already %s', async (status) => {
+      pending({ status });
+
+      await expect(service.submitForReview(PROGRAM_ID, ORG_ID, ACTOR)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(mockProgramRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses to submit something already past its closing date', async () => {
+      pending({ expiresAt: new Date(Date.now() - 86_400_000) });
+
+      await expect(service.submitForReview(PROGRAM_ID, ORG_ID, ACTOR)).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
+    });
+
+    it('403s on another organisation’s programme', async () => {
+      pending({ orgId: 'OTHERORG' });
+
+      await expect(service.submitForReview(PROGRAM_ID, ORG_ID, ACTOR)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(mockProgramRepo.update).not.toHaveBeenCalled();
+    });
+
+    // The submission has committed; a queue outage must not report failure for it,
+    // or the NGO retries into a 409.
+    it('still succeeds when the admin alert cannot be queued', async () => {
+      pending();
+      mockAdminQueue.add.mockRejectedValueOnce(new Error('redis down'));
+
+      await expect(service.submitForReview(PROGRAM_ID, ORG_ID, ACTOR)).resolves.toBeDefined();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // findAllForAdmin — the review queue
+  // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // browseForPatient — what a patient sees before applying
+  // ---------------------------------------------------------------------------
+  describe('browseForPatient', () => {
+    function rawRow(over: Record<string, unknown> = {}) {
+      return {
+        id: PROGRAM_ID,
+        title: 'Chronic Care Fund',
+        type: ProgramType.NGO_FUNDING,
+        orgId: ORG_ID,
+        orgName: 'Hope Health',
+        expiresAt: new Date(),
+        slotsTotal: 50,
+        slotsFilled: 12,
+        description: 'Covers monthly medication costs.',
+        focus: 'Diabetes · Hypertension',
+        donor: 'GSK Nigeria',
+        coordinator: 'Bisi Lawal',
+        ...over,
+      };
+    }
+
+    beforeEach(() => {
+      mockProgramQb.getRawMany.mockResolvedValue([rawRow()]);
+    });
+
+    it('returns what the NGO wrote about the programme', async () => {
+      const { programs } = await service.browseForPatient({ limit: 20 } as PaginationDto);
+
+      expect(programs[0]).toEqual(
+        expect.objectContaining({
+          description: 'Covers monthly medication costs.',
+          focus: 'Diabetes · Hypertension',
+          donor: 'GSK Nigeria',
+          coordinator: 'Bisi Lawal',
+        }),
+      );
+    });
+
+    // orgId is an opaque ULID and no patient-reachable endpoint resolves it, so
+    // without the join a patient cannot tell who is offering the programme.
+    it('names the organisation', async () => {
+      const { programs } = await service.browseForPatient({ limit: 20 } as PaginationDto);
+
+      expect(mockProgramQb.leftJoin).toHaveBeenCalled();
+      expect(programs[0].orgName).toBe('Hope Health');
+    });
+
+    /**
+     * The privacy assertion. Budget reads as a promise of a personal award,
+     * eligibility criteria are matcher config, and the review trail is the NGO's
+     * private correspondence with the platform.
+     */
+    it('withholds budget, eligibility and the review trail', async () => {
+      await service.browseForPatient({ limit: 20 } as PaginationDto);
+
+      const selected = mockProgramQb.select.mock.calls.flat(2).join(' ');
+      for (const column of [
+        'budget_total',
+        'budget_disbursed',
+        'eligibility_criteria',
+        'p.status',
+        'rejection_reason',
+        'reviewed_by',
+      ]) {
+        expect(selected).not.toContain(column);
+      }
+    });
+
+    it('shows only approved, unpaused, unexpired programmes', async () => {
+      await service.browseForPatient({ limit: 20 } as PaginationDto);
+
+      expect(mockProgramQb.where).toHaveBeenCalledWith('p.status = :status', {
+        status: ProgramStatus.APPROVED,
+      });
+      expect(mockProgramQb.andWhere).toHaveBeenCalledWith('p.expires_at > NOW()');
+      expect(mockProgramQb.andWhere).toHaveBeenCalledWith('p.paused_at IS NULL');
+    });
+
+    it('pages forward from the cursor', async () => {
+      mockProgramQb.getRawMany.mockResolvedValue([
+        rawRow({ id: 'P1' }),
+        rawRow({ id: 'P2' }),
+        rawRow({ id: 'P3' }),
+      ]);
+
+      const { programs, nextCursor } = await service.browseForPatient({ limit: 2 } as PaginationDto);
+
+      expect(programs).toHaveLength(2);
+      expect(nextCursor).toBe('P2');
+    });
+
+    // Every detail column is nullable, and programmes created before they existed
+    // have none of them.
+    it('handles a programme with no detail at all', async () => {
+      mockProgramQb.getRawMany.mockResolvedValue([
+        rawRow({ description: null, focus: null, donor: null, coordinator: null }),
+      ]);
+
+      const { programs } = await service.browseForPatient({ limit: 20 } as PaginationDto);
+
+      expect(programs[0].title).toBe('Chronic Care Fund');
+      expect(programs[0].description).toBeNull();
+    });
+  });
+
+  describe('findAllForAdmin', () => {
+    function rawRow(over: Record<string, unknown> = {}) {
+      return {
+        id: PROGRAM_ID,
+        title: 'Chronic Care Fund',
+        status: ProgramStatus.PENDING_REVIEW,
+        orgId: ORG_ID,
+        orgName: 'Hope Health',
+        budgetTotal: '1850000000',
+        ...over,
+      };
+    }
+
+    beforeEach(() => {
+      mockProgramQb.leftJoin.mockReturnThis();
+      mockProgramQb.limit.mockReturnThis();
+      mockProgramQb.getRawMany.mockResolvedValue([rawRow()]);
+    });
+
+    // A draft is the NGO's private working copy — it has been handed to nobody.
+    it('never exposes drafts to the review queue', async () => {
+      await service.findAllForAdmin({ limit: 20 } as ListProgramsDto);
+
+      expect(mockProgramQb.andWhere).toHaveBeenCalledWith('p.status <> :draft', {
+        draft: ProgramStatus.DRAFT,
+      });
+    });
+
+    it('returns the submitting organisation alongside the programme', async () => {
+      const { programs } = await service.findAllForAdmin({ limit: 20 } as ListProgramsDto);
+
+      expect(programs[0].orgName).toBe('Hope Health');
+    });
+
+    // bigint comes back from pg as a string outside the entity transformer.
+    it('returns the budget as a number, not a string', async () => {
+      const { programs } = await service.findAllForAdmin({ limit: 20 } as ListProgramsDto);
+
+      expect(programs[0].budgetTotal).toBe(1_850_000_000);
+    });
+
+    it('pages backwards from the cursor, newest first', async () => {
+      mockProgramQb.getRawMany.mockResolvedValue([
+        rawRow({ id: 'P3' }),
+        rawRow({ id: 'P2' }),
+        rawRow({ id: 'P1' }),
+      ]);
+
+      const { programs, nextCursor } = await service.findAllForAdmin({ limit: 2 } as ListProgramsDto);
+
+      expect(mockProgramQb.orderBy).toHaveBeenCalledWith('p.id', 'DESC');
+      expect(programs).toHaveLength(2);
+      expect(nextCursor).toBe('P2');
+    });
+
+    it('filters by status when asked', async () => {
+      await service.findAllForAdmin({
+        limit: 20,
+        status: ProgramStatus.PENDING_REVIEW,
+      } as ListProgramsDto);
+
+      expect(mockProgramQb.andWhere).toHaveBeenCalledWith('p.status = :status', {
+        status: ProgramStatus.PENDING_REVIEW,
+      });
+    });
+  });
+
   describe('update', () => {
     beforeEach(() => {
       mockProgramRepo.update.mockResolvedValue({ affected: 1 });
     });
 
+    // Defaults to DRAFT — the state where everything is editable. Approved
+    // programmes are locked, which the block at the end of this describe covers.
     function existing(overrides: Partial<Program> = {}) {
-      const program = makeProgram({ status: ProgramStatus.APPROVED, ...overrides });
+      const program = makeProgram({ status: ProgramStatus.DRAFT, ...overrides });
       mockProgramRepo.findOne.mockResolvedValue(program);
       return program;
     }
@@ -651,7 +941,7 @@ describe('ProgramsService', () => {
     });
 
     it('pausing stamps pausedAt', async () => {
-      existing();
+      existing({ status: ProgramStatus.APPROVED });
       await service.update(PROGRAM_ID, ORG_ID, { paused: true });
 
       const [, patch] = mockProgramRepo.update.mock.calls[0];
@@ -660,7 +950,7 @@ describe('ProgramsService', () => {
 
     // undefined would mean "leave unchanged" to TypeORM, making Resume a no-op.
     it('resuming writes an explicit null, not undefined', async () => {
-      existing({ pausedAt: new Date() });
+      existing({ status: ProgramStatus.APPROVED, pausedAt: new Date() });
       await service.update(PROGRAM_ID, ORG_ID, { paused: false });
 
       const [, patch] = mockProgramRepo.update.mock.calls[0];
@@ -719,6 +1009,95 @@ describe('ProgramsService', () => {
       existing();
       await service.update(PROGRAM_ID, ORG_ID, {});
       expect(mockProgramRepo.update).not.toHaveBeenCalled();
+    });
+
+    // Edits used to leave no trace at all, so a live programme could be re-scoped
+    // with nothing to show for it.
+    it('audits what changed', async () => {
+      existing();
+      await service.update(PROGRAM_ID, ORG_ID, { title: 'Renamed' }, 'user-1');
+
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorId: 'user-1',
+          action: AuditAction.PROGRAM_UPDATED,
+          resourceId: PROGRAM_ID,
+          resourceType: 'program',
+        }),
+      );
+    });
+
+    it('still succeeds when the audit write fails', async () => {
+      existing();
+      mockAuditService.log.mockRejectedValueOnce(new Error('db down'));
+
+      await expect(
+        service.update(PROGRAM_ID, ORG_ID, { title: 'Renamed' }),
+      ).resolves.toBeDefined();
+    });
+
+    it('lets a draft change who qualifies', async () => {
+      existing();
+      const criteria = [{ field: 'conditionTags', operator: 'in' as const, value: ['Asthma'] }];
+
+      await service.update(PROGRAM_ID, ORG_ID, { eligibilityCriteria: criteria });
+
+      const [, patch] = mockProgramRepo.update.mock.calls[0];
+      expect(patch.eligibilityCriteria).toEqual(criteria);
+    });
+
+    // Patients have applied under the approved terms, so the programme is frozen
+    // apart from pausing intake and pushing the closing date out.
+    describe('once approved', () => {
+      const approved = () => existing({ status: ProgramStatus.APPROVED });
+
+      it.each([
+        ['title', { title: 'Renamed' }],
+        ['budgetTotal', { budgetTotal: 5_000_000 }],
+        ['slotsTotal', { slotsTotal: 99 }],
+        ['description', { description: 'Rewritten' }],
+        ['eligibilityCriteria', { eligibilityCriteria: [{ field: 'gender', operator: 'eq' as const, value: 'female' }] }],
+      ])('refuses to change %s', async (_field, dto) => {
+        approved();
+
+        await expect(service.update(PROGRAM_ID, ORG_ID, dto)).rejects.toBeInstanceOf(
+          UnprocessableEntityException,
+        );
+        expect(mockProgramRepo.update).not.toHaveBeenCalled();
+      });
+
+      it('allows pausing and resuming', async () => {
+        approved();
+        await expect(service.update(PROGRAM_ID, ORG_ID, { paused: true })).resolves.toBeDefined();
+      });
+
+      it('allows extending the closing date', async () => {
+        const program = approved();
+        const later = new Date(program.expiresAt.getTime() + 30 * 86_400_000).toISOString();
+
+        await expect(
+          service.update(PROGRAM_ID, ORG_ID, { expiresAt: later }),
+        ).resolves.toBeDefined();
+      });
+
+      // Closing early is what Pause is for; shortening the window under people who
+      // already applied is not something to do quietly.
+      it('refuses to bring the closing date forward', async () => {
+        const program = approved();
+        const sooner = new Date(program.expiresAt.getTime() - 3_600_000).toISOString();
+
+        await expect(
+          service.update(PROGRAM_ID, ORG_ID, { expiresAt: sooner }),
+        ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      });
+    });
+
+    it('refuses to edit an expired programme at all', async () => {
+      existing({ status: ProgramStatus.EXPIRED });
+
+      await expect(
+        service.update(PROGRAM_ID, ORG_ID, { title: 'Renamed' }),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
   });
   // Slot accounting is the substantive part: SELECTED occupies a place, everything

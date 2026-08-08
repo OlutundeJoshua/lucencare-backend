@@ -53,11 +53,35 @@ export enum ProgramType {
 }
 
 export enum ProgramStatus {
+  // The NGO is still preparing it. Invisible to patients AND to the admin queue —
+  // creating a programme no longer submits it; POST /programs/:id/submit does.
+  DRAFT = 'draft',
   PENDING_REVIEW = 'pending_review',
   APPROVED = 'approved',
   REJECTED = 'rejected',
   EXPIRED = 'expired',
 }
+
+/**
+ * The states an NGO may hand to the platform for review. Rejected is included on
+ * purpose: fixing what the reviewer objected to and resubmitting is the point of
+ * recording a reason, and without this edge a rejection is terminal.
+ */
+export const SUBMITTABLE_PROGRAM_STATUSES = [
+  ProgramStatus.DRAFT,
+  ProgramStatus.REJECTED,
+] as const;
+
+/**
+ * The states an NGO may still edit freely. Once approved a programme is public and
+ * patients have applied under its stated terms, so only pause/resume and extending
+ * the closing date remain — see ProgramsService.update().
+ */
+export const EDITABLE_PROGRAM_STATUSES = [
+  ProgramStatus.DRAFT,
+  ProgramStatus.PENDING_REVIEW,
+  ProgramStatus.REJECTED,
+] as const;
 
 export enum StudyStatus {
   PENDING_REVIEW = 'pending_review',
@@ -148,6 +172,10 @@ export enum NotificationType {
   // A professional or benefactor application is awaiting review. The org-shaped
   // equivalent is ORG_PENDING_VERIFICATION.
   APPLICATION_PENDING_REVIEW = 'application_pending_review',
+  // An NGO submitted a funding programme — sent to the platform admins.
+  PROGRAM_PENDING_REVIEW = 'program_pending_review',
+  // The platform's decision on that programme — sent back to the NGO's staff.
+  PROGRAM_REVIEWED = 'program_reviewed',
 }
 
 export enum AuditAction {
@@ -156,6 +184,9 @@ export enum AuditAction {
   ADMIN_APPROVE = 'admin_approve',
   ADMIN_REJECT = 'admin_reject',
   APPLICATION_SUBMITTED = 'application_submitted',
+  // An NGO edited its own programme. Until now edits left no trace at all, so an
+  // approved programme could be re-scoped with nothing to show for it.
+  PROGRAM_UPDATED = 'program_updated',
   LOGIN = 'login',
   CONSENT_CHANGE = 'consent_change',
   CROSS_ORG_ATTEMPT = 'cross_org_attempt',

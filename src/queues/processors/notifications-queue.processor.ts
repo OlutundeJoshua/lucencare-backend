@@ -8,7 +8,6 @@ import {
   MEDICATION_REFILL_CHECK_JOB,
   MEDICATION_REMINDER_TICK_JOB,
   NOTIFICATIONS_QUEUE,
-  PROGRAM_APPROVED_JOB,
   STUDY_APPROVED_JOB,
   WORKER_POLL_OPTIONS,
 } from 'src/queues/queues.constants';
@@ -18,16 +17,17 @@ import { ConsentRevokedProcessor } from './consent-revoked.processor';
 import { FanOutNotifyProcessor } from './fan-out-notify.processor';
 import { MedicationRefillCheckProcessor } from './medication-refill-check.processor';
 import { MedicationReminderTickProcessor } from './medication-reminder-tick.processor';
-import { ProgramApprovedProcessor } from './program-approved.processor';
 import { StudyApprovedProcessor } from './study-approved.processor';
 
+// PROGRAM_APPROVED_JOB used to be routed here while AdminService enqueued it on
+// ADMIN_QUEUE — so it matched nothing, and removeOnComplete threw it away. Both
+// programme outcome jobs now live with their producer, in AdminQueueProcessor.
 @Processor(NOTIFICATIONS_QUEUE, WORKER_POLL_OPTIONS)
 export class NotificationsQueueProcessor extends WorkerHost {
   constructor(
     private readonly fanOutNotifyProcessor: FanOutNotifyProcessor,
     private readonly batchNotifyProcessor: BatchNotifyProcessor,
     private readonly consentRevokedProcessor: ConsentRevokedProcessor,
-    private readonly programApprovedProcessor: ProgramApprovedProcessor,
     private readonly studyApprovedProcessor: StudyApprovedProcessor,
     private readonly medicationRefillCheckProcessor: MedicationRefillCheckProcessor,
     private readonly medicationReminderTickProcessor: MedicationReminderTickProcessor,
@@ -43,8 +43,6 @@ export class NotificationsQueueProcessor extends WorkerHost {
         return this.batchNotifyProcessor.process(job);
       case CONSENT_REVOKED_JOB:
         return this.consentRevokedProcessor.process(job);
-      case PROGRAM_APPROVED_JOB:
-        return this.programApprovedProcessor.process(job);
       case STUDY_APPROVED_JOB:
         return this.studyApprovedProcessor.process(job);
       case MEDICATION_REFILL_CHECK_JOB:

@@ -43,12 +43,24 @@ export class ProgramsController {
   @Post()
   @UseGuards(JwtAuthGuard, RoleGuard)
   @Roles(UserRole.NGO_ADMIN)
-  @ApiOperation({ summary: 'Create a program (NGO admin only)' })
+  @ApiOperation({ summary: 'Create a programme as a draft (NGO admin only)' })
   async create(@Body() dto: CreateProgramDto, @CurrentUser() user: JwtPayload) {
     // Returned bare: TransformInterceptor only unwraps a payload carrying BOTH
     // `data` and `meta`, so a hand-wrapped { data } became { data: { data } } on
     // the wire. Paginated handlers below keep their { data, meta } shape.
     return this.programsService.create(user.orgId!, dto);
+  }
+
+  @Post(':id/submit')
+  @UseGuards(JwtAuthGuard, RoleGuard)
+  @Roles(UserRole.NGO_ADMIN)
+  @ApiOperation({ summary: 'Submit a draft or rejected programme for platform review' })
+  @ApiResponse({ status: 201, description: 'Programme is now awaiting review' })
+  @ApiResponse({ status: 403, description: 'Programme belongs to a different organization' })
+  @ApiResponse({ status: 404, description: 'Programme not found' })
+  @ApiResponse({ status: 409, description: 'Programme is not in a submittable state' })
+  async submit(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.programsService.submitForReview(id, user.orgId!, user.sub);
   }
 
   @Get(':id')
@@ -74,7 +86,7 @@ export class ProgramsController {
     @Body() dto: UpdateProgramDto,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.programsService.update(id, user.orgId!, dto);
+    return this.programsService.update(id, user.orgId!, dto, user.sub);
   }
 
   @Get(':id/matches')

@@ -11,6 +11,8 @@ import { ApplicationsService } from 'src/modules/applications/applications.servi
 import { ListApplicationsQueryDto, ReviewApplicationDto } from 'src/modules/applications/dto/applications.dto';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { ListAuditDto } from 'src/modules/audit/dto/list-audit.dto';
+import { ListProgramsDto } from 'src/modules/programs/dto/list-programs.dto';
+import { ProgramsService } from 'src/modules/programs/programs.service';
 
 import { AdminService } from './admin.service';
 import { AdminApproveDto } from './dto/admin-approve.dto';
@@ -24,6 +26,9 @@ export class AdminController {
     private readonly adminService: AdminService,
     private readonly applicationsService: ApplicationsService,
     private readonly auditService: AuditService,
+    // The review queue reads programmes across every org, which the NGO-scoped
+    // findByOrg cannot serve.
+    private readonly programsService: ProgramsService,
   ) {}
 
   @Get('audit')
@@ -48,6 +53,16 @@ export class AdminController {
     @CurrentUser() user: JwtPayload,
   ) {
     return this.adminService.reviewOrganization(id, user.sub, dto);
+  }
+
+  @Get('programs')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List submitted programmes for review, newest first' })
+  @ApiResponse({ status: 200, description: 'Programmes awaiting or past review' })
+  async listPrograms(@Query() query: ListProgramsDto) {
+    // Drafts are excluded in the service: they are the NGO's private working copy.
+    const { programs, nextCursor } = await this.programsService.findAllForAdmin(query);
+    return { data: programs, meta: { cursor: nextCursor, limit: query.limit ?? 20 } };
   }
 
   @Patch('programs/:id')

@@ -91,6 +91,19 @@ export class EnrollmentsService {
       if (program.expiresAt <= new Date()) {
         throw new UnprocessableEntityException('Program has expired');
       }
+      // Paused and full are the two ways an approved programme stops taking
+      // applications. Both are 409 rather than 422: nothing about the request is
+      // wrong, the programme is simply closed right now.
+      if (program.pausedAt) {
+        throw new ConflictException('This programme has paused new applications');
+      }
+      if (
+        program.slotsTotal !== undefined &&
+        program.slotsTotal !== null &&
+        program.slotsFilled >= program.slotsTotal
+      ) {
+        throw new ConflictException('This programme has no places left');
+      }
 
       const grant = await manager
         .getRepository(ConsentGrant)
@@ -322,6 +335,12 @@ export class EnrollmentsService {
         'p.title AS "programTitle"',
         'p.type AS "programType"',
         'p.expires_at AS "programExpiresAt"',
+        // The same description the patient read before applying. Without it, the
+        // application they are reviewing is just a title and two dates.
+        'p.description AS "programDescription"',
+        'p.focus AS "programFocus"',
+        'p.donor AS "programDonor"',
+        'p.coordinator AS "programCoordinator"',
         'o.name AS "orgName"',
       ])
       .where('e.patient_id = :patientId', { patientId })

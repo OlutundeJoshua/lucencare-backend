@@ -14,12 +14,14 @@ import { DataSource, Repository } from 'typeorm';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import {
   AuditAction,
+  EDITABLE_PROGRAM_STATUSES,
   EnrollmentStatus,
   LIVE_ENROLLMENT_STATUSES,
   NotificationType,
   OrgStatus,
   ProgramStatus,
   ProgramType,
+  SUBMITTABLE_PROGRAM_STATUSES,
 } from 'src/common/enums';
 import {
   ADMIN_QUEUE,
@@ -37,12 +39,15 @@ import { User } from 'src/modules/auth/entities/user.entity';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { MatchingService } from 'src/modules/matching/matching.service';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
+import { ProgramReviewJob } from 'src/queues/interfaces/program-review-job.interface';
 
 import { CreateProgramDto } from './dto/create-program.dto';
 import { ListProgramsDto } from './dto/list-programs.dto';
 import { ReviewEnrollmentDto } from './dto/review-enrollment.dto';
 import { UpdateProgramDto } from './dto/update-program.dto';
 import { Program } from './entities/program.entity';
+import { AdminProgramView } from './interfaces/admin-program-view.interface';
+import { BrowsableProgram } from './interfaces/browsable-program.interface';
 import { EnrollmentSnapshot } from './interfaces/enrollment-snapshot.interface';
 import { OrgStats } from './interfaces/org-stats.interface';
 import { PatientMapRow } from './interfaces/patient-map-row.interface';
@@ -113,7 +118,8 @@ export class ProgramsService {
       type: dto.type,
       eligibilityCriteria: dto.eligibilityCriteria,
       expiresAt: new Date(dto.expiresAt),
-      status: ProgramStatus.PENDING_REVIEW,
+      // Creating is not submitting. The NGO keeps editing until it presses Submit.
+      status: ProgramStatus.DRAFT,
       description: dto.description,
       focus: dto.focus,
       donor: dto.donor,
@@ -125,22 +131,83 @@ export class ProgramsService {
       slotsFilled: 0,
     });
     const saved = await this.programRepo.save(program);
-
-    await this.adminQueue.add(PROGRAM_REVIEW_JOB, {
-      programId: saved.id,
-      orgId,
-      title: saved.title,
-    });
-
     return this.toView(saved);
+  }
+
+  /**
+   * Hand a draft to the platform for review.
+   *
+   * Also the resubmission path: a rejected programme was previously terminal,
+   * because AdminService only reviews PENDING_REVIEW and nothing could move a
+   * rejection back there. Editing and resubmitting now closes that loop.
+   */
+  async submitForReview(id: string, orgId: string, actorId: string): Promise<ProgramView> {
+    const program = await this.findByIdForOrg(id, orgId);
+
+    if (!SUBMITTABLE_PROGRAM_STATUSES.includes(program.status as never)) {
+      throw new ConflictException(
+        program.status === ProgramStatus.PENDING_REVIEW
+          ? 'This programme is already awaiting review'
+          : `A programme that is ${program.status} cannot be submitted for review`,
+      );
+    }
+    if (program.expiresAt <= new Date()) {
+      throw new UnprocessableEntityException(
+        'The closing date has passed — set a future one before submitting',
+      );
+    }
+
+    await this.programRepo.update(
+      { id },
+      {
+        status: ProgramStatus.PENDING_REVIEW,
+        // A stale reason from the previous rejection must not survive the fix.
+        rejectionReason: null,
+        reviewedAt: null,
+        reviewedBy: null,
+      },
+    );
+
+    try {
+      await this.auditService.log({
+        actorId,
+        action: AuditAction.APPLICATION_SUBMITTED,
+        resourceId: id,
+        resourceType: 'program',
+        metadata: { orgId, resubmitted: program.status === ProgramStatus.REJECTED },
+      });
+    } catch (err) {
+      this.logger.error(`Failed to audit programme submission ${id}: ${(err as Error).message}`);
+    }
+
+    // Guarded: the submission has committed, and a queue outage must not report
+    // failure for work that succeeded — the NGO would retry into a 409.
+    try {
+      const job: ProgramReviewJob = { programId: id, orgId, title: program.title };
+      await this.adminQueue.add(PROGRAM_REVIEW_JOB, job);
+    } catch (err) {
+      this.logger.error(
+        `Failed to alert admins of programme submission ${id}: ${(err as Error).message}`,
+      );
+    }
+
+    const updated = await this.programRepo.findOne({ where: { id } });
+    return this.toView(updated as Program);
   }
 
   /**
    * NGO-scoped edit. Ownership is enforced by findByIdForOrg, so a programme
    * belonging to another organisation 403s before anything is written.
    */
-  async update(id: string, orgId: string, dto: UpdateProgramDto): Promise<ProgramView> {
+  async update(
+    id: string,
+    orgId: string,
+    dto: UpdateProgramDto,
+    actorId?: string,
+  ): Promise<ProgramView> {
     const program = await this.findByIdForOrg(id, orgId);
+
+    this.assertEditable(program, dto);
 
     if (dto.expiresAt !== undefined && new Date(dto.expiresAt) <= new Date()) {
       throw new UnprocessableEntityException('expiresAt must be in the future');
@@ -170,15 +237,64 @@ export class ProgramsService {
     if (dto.budgetTotal !== undefined) patch.budgetTotal = dto.budgetTotal;
     if (dto.slotsTotal !== undefined) patch.slotsTotal = dto.slotsTotal;
     if (dto.expiresAt !== undefined) patch.expiresAt = new Date(dto.expiresAt);
+    if (dto.eligibilityCriteria !== undefined) patch.eligibilityCriteria = dto.eligibilityCriteria;
     // The client states intent; the server owns the clock.
     if (dto.paused !== undefined) patch.pausedAt = dto.paused ? new Date() : null;
 
     if (Object.keys(patch).length > 0) {
       await this.programRepo.update({ id }, patch);
+
+      // Edits used to leave no trace, so an approved programme could be re-scoped
+      // with nothing to show for it. Guarded — the write has already committed.
+      try {
+        await this.auditService.log({
+          actorId: actorId ?? orgId,
+          action: AuditAction.PROGRAM_UPDATED,
+          resourceId: id,
+          resourceType: 'program',
+          metadata: { fields: Object.keys(patch), status: program.status },
+        });
+      } catch (err) {
+        this.logger.error(`Failed to audit programme update ${id}: ${(err as Error).message}`);
+      }
     }
 
     const updated = await this.programRepo.findOne({ where: { id } });
     return this.toView(updated as Program);
+  }
+
+  /**
+   * What may still be changed, given where the programme sits in review.
+   *
+   * An approved programme is public and patients have applied under its stated
+   * terms, so it is frozen apart from pausing intake and pushing the closing date
+   * out. Everything else needs a new review, which means a new programme.
+   */
+  private assertEditable(program: Program, dto: UpdateProgramDto): void {
+    if (EDITABLE_PROGRAM_STATUSES.includes(program.status as never)) return;
+
+    if (program.status !== ProgramStatus.APPROVED) {
+      throw new ConflictException(`A programme that is ${program.status} can no longer be edited`);
+    }
+
+    const attempted = Object.keys(dto).filter(
+      (key) => (dto as Record<string, unknown>)[key] !== undefined,
+    );
+    const locked = attempted.filter((key) => key !== 'paused' && key !== 'expiresAt');
+    if (locked.length > 0) {
+      throw new UnprocessableEntityException(
+        `An approved programme cannot change ${locked.join(', ')}. ` +
+          'Only pausing intake and extending the closing date remain available.',
+      );
+    }
+
+    // Extending only. Closing early is what Pause is for, and shortening the
+    // window under applicants who already applied is not the NGO's to do quietly.
+    if (dto.expiresAt !== undefined && new Date(dto.expiresAt) <= program.expiresAt) {
+      throw new UnprocessableEntityException(
+        'An approved programme’s closing date can only be extended. Pause it to stop taking applications now.',
+      );
+    }
   }
 
   async findByOrg(
@@ -359,6 +475,70 @@ export class ProgramsService {
     return byState;
   }
 
+  /**
+   * The platform admin's review queue — every organisation's programmes.
+   *
+   * Separate from findByOrg, which is hard-scoped to one org and cannot serve an
+   * admin. Newest first: a review queue is worked from the most recent submission,
+   * and ULIDs sort by creation time so the cursor walks backwards with `<`.
+   */
+  async findAllForAdmin(
+    query: ListProgramsDto,
+  ): Promise<{ programs: AdminProgramView[]; nextCursor?: string }> {
+    const limit = query.limit ?? 20;
+
+    const qb = this.programRepo
+      .createQueryBuilder('p')
+      .leftJoin(Organization, 'o', 'o.id = p.org_id')
+      .select([
+        'p.id AS id',
+        'p.title AS title',
+        'p.type AS type',
+        'p.status AS status',
+        'p.org_id AS "orgId"',
+        'p.description AS description',
+        'p.focus AS focus',
+        'p.donor AS donor',
+        'p.coordinator AS coordinator',
+        'p.eligibility_criteria AS "eligibilityCriteria"',
+        'p.budget_total AS "budgetTotal"',
+        'p.slots_total AS "slotsTotal"',
+        'p.expires_at AS "expiresAt"',
+        'p.created_at AS "createdAt"',
+        'p.rejection_reason AS "rejectionReason"',
+        'p.reviewed_at AS "reviewedAt"',
+        'o.name AS "orgName"',
+        'o.contact_email AS "orgContactEmail"',
+      ])
+      .where('p.deleted_at IS NULL')
+      // A draft is the NGO's private working copy — it has not been handed to
+      // anyone, so it must never appear in the review queue.
+      .andWhere('p.status <> :draft', { draft: ProgramStatus.DRAFT })
+      .orderBy('p.id', 'DESC')
+      .limit(limit + 1);
+
+    if (query.status) {
+      qb.andWhere('p.status = :status', { status: query.status });
+    }
+    if (query.cursor) {
+      qb.andWhere('p.id < :cursor', { cursor: query.cursor });
+    }
+
+    const rows = await qb.getRawMany<Record<string, unknown>>();
+    const hasMore = rows.length > limit;
+    if (hasMore) rows.pop();
+    const nextCursor = hasMore ? (rows[rows.length - 1].id as string) : undefined;
+
+    // budget_total is bigint, which pg returns as a string outside the entity's
+    // transformer — the admin card would otherwise format "1850000000" as text.
+    const programs = rows.map((r) => ({
+      ...r,
+      budgetTotal: r.budgetTotal === null || r.budgetTotal === undefined ? null : Number(r.budgetTotal),
+    })) as unknown as AdminProgramView[];
+
+    return { programs, nextCursor };
+  }
+
   async findByIdForOrg(id: string, orgId: string): Promise<Program> {
     const program = await this.programRepo.findOne({ where: { id } });
     if (!program) {
@@ -381,9 +561,20 @@ export class ProgramsService {
    * and full is a consequence.
    */
   private lifecycleOf(program: Program, now = new Date()): ProgramLifecycle {
-    if (program.status !== ProgramStatus.APPROVED) {
-      return program.status === ProgramStatus.EXPIRED ? 'Expired' : 'Draft';
+    // Before approval the label IS the review state. Collapsing them all to
+    // 'Draft' — as this did — left an NGO unable to tell "waiting on the platform"
+    // from "rejected, fix it and resubmit".
+    switch (program.status) {
+      case ProgramStatus.DRAFT:
+        return 'Draft';
+      case ProgramStatus.PENDING_REVIEW:
+        return 'In review';
+      case ProgramStatus.REJECTED:
+        return 'Not approved';
+      case ProgramStatus.EXPIRED:
+        return 'Expired';
     }
+
     if (program.expiresAt <= now) return 'Expired';
     if (program.pausedAt) return 'Paused';
 
@@ -404,26 +595,55 @@ export class ProgramsService {
     });
   }
 
+  /**
+   * What a patient sees when choosing a programme to apply to.
+   *
+   * Carries the NGO's own description of the programme — see BrowsableProgram for
+   * what is deliberately withheld. Previously this returned a title, a type, an
+   * opaque orgId and two dates, so the card could say almost nothing about what
+   * the programme actually offered.
+   */
   async browseForPatient(
     query: PaginationDto,
-  ): Promise<{ programs: Pick<Program, 'id' | 'title' | 'type' | 'orgId' | 'expiresAt'>[]; nextCursor?: string }> {
+  ): Promise<{ programs: BrowsableProgram[]; nextCursor?: string }> {
     const qb = this.programRepo
       .createQueryBuilder('p')
-      // Entity property paths, not DB column names. With 'p.org_id'/'p.expires_at'
-      // TypeORM silently DROPPED both from the result rather than erroring, so this
-      // endpoint returned {id,title,type} while its signature promised five fields.
-      .select(['p.id', 'p.title', 'p.type', 'p.orgId', 'p.expiresAt'])
+      // Bounded join: the page caps the driving side at limit + 1 rows, and
+      // organizations.id is the primary key, so this is at most 21 unique-index
+      // lookups per request however many organisations exist. Without it `orgId`
+      // is an opaque ULID no patient-reachable endpoint can resolve.
+      .leftJoin(Organization, 'o', 'o.id = p.org_id')
+      .select([
+        'p.id AS id',
+        'p.title AS title',
+        'p.type AS type',
+        'p.org_id AS "orgId"',
+        'p.expires_at AS "expiresAt"',
+        'p.slots_total AS "slotsTotal"',
+        'p.slots_filled AS "slotsFilled"',
+        'p.description AS description',
+        'p.focus AS focus',
+        'p.donor AS donor',
+        'p.coordinator AS coordinator',
+        'o.name AS "orgName"',
+      ])
       .where('p.status = :status', { status: ProgramStatus.APPROVED })
       .andWhere('p.expires_at > NOW()')
+      // A paused programme is not taking applications, so showing it to patients
+      // only produces a 409 at the end of the journey. Full ones stay listed —
+      // seeing what exists is useful even when you cannot join it today.
+      .andWhere('p.paused_at IS NULL')
       .andWhere('p.deleted_at IS NULL')
       .orderBy('p.id', 'ASC')
-      .take(query.limit + 1);
+      .limit(query.limit + 1);
 
     if (query.cursor) {
       qb.andWhere('p.id > :cursor', { cursor: query.cursor });
     }
 
-    const rows = await qb.getMany();
+    // Raw rows rather than entities: `orgName` comes from the joined table and has
+    // nowhere to live on Program. The cursor reads the raw id for the same reason.
+    const rows = await qb.getRawMany<BrowsableProgram>();
     const hasMore = rows.length > query.limit;
     if (hasMore) rows.pop();
     const nextCursor = hasMore ? rows[rows.length - 1].id : undefined;
@@ -640,13 +860,29 @@ export class ProgramsService {
     return program;
   }
 
-  async updateStatus(programId: string, status: ProgramStatus): Promise<Program> {
+  /**
+   * Records the platform's decision. Called only by AdminService.
+   *
+   * The outcome is stored on the programme, not just in an audit row: the NGO has
+   * to be able to read why it was rejected, and the audit log is admin-only.
+   */
+  async updateStatus(
+    programId: string,
+    status: ProgramStatus,
+    review?: { reason?: string; reviewedBy?: string },
+  ): Promise<Program> {
     const program = await this.programRepo.findOne({ where: { id: programId } });
     if (!program) {
       throw new NotFoundException(`Program ${programId} not found`);
     }
 
     program.status = status;
+    program.reviewedAt = new Date();
+    program.reviewedBy = review?.reviewedBy ?? null;
+    // Cleared on anything but a rejection, so an approval cannot leave the last
+    // rejection's reason sitting on the record for the NGO to read.
+    program.rejectionReason = status === ProgramStatus.REJECTED ? (review?.reason ?? null) : null;
+
     const saved = await this.programRepo.save(program);
 
     if (status === ProgramStatus.APPROVED) {

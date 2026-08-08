@@ -47,6 +47,9 @@ export class MatchingService {
       .createQueryBuilder('p')
       .where('p.status = :approved', { approved: ProgramStatus.APPROVED })
       .andWhere('p.expires_at > NOW()')
+      // Recommending a programme that has stopped taking applications wastes the
+      // patient's time — the same rule browseForPatient applies.
+      .andWhere('p.paused_at IS NULL')
       .andWhere('p.deleted_at IS NULL')
       .andWhere(
         `EXISTS (

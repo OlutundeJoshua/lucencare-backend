@@ -1,12 +1,30 @@
-import { IsBoolean, IsDateString, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
+import {
+  ArrayMinSize,
+  IsArray,
+  IsBoolean,
+  IsDateString,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
+import { EligibilityCriterionDto } from './create-program.dto';
+
 /**
- * What an NGO may change on its own programme after creation.
+ * What an NGO may change on its own programme.
  *
- * Deliberately excluded:
- * - `type` and `eligibilityCriteria` — changing who qualifies after patients have
- *   applied would silently re-scope a programme people already enrolled in.
+ * WHICH of these are accepted depends on the review state, enforced in
+ * ProgramsService.assertEditable(): draft, in-review and rejected programmes take
+ * everything here; an approved one takes only `paused` and a later `expiresAt`,
+ * because patients have already applied under its stated terms.
+ *
+ * Deliberately excluded at every state:
+ * - `type` — a funding programme cannot become something else.
  * - `status` — the platform review state is the admin's to set, not the NGO's.
  * - `budgetDisbursed` / `slotsFilled` — platform-maintained counters.
  */
@@ -33,6 +51,19 @@ export class UpdateProgramDto {
   @IsOptional()
   @IsDateString()
   expiresAt?: string;
+
+  /**
+   * Who qualifies. Editable while the programme is still a draft or has come back
+   * rejected — fixing the criteria is usually the whole reason it was rejected.
+   * Refused once approved, where it would silently re-scope a live programme.
+   */
+  @ApiPropertyOptional({ type: [EligibilityCriterionDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => EligibilityCriterionDto)
+  eligibilityCriteria?: EligibilityCriterionDto[];
 
   /**
    * Pause or resume intake. A boolean rather than a timestamp so the client states

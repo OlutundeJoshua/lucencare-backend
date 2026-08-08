@@ -22,12 +22,15 @@ export class Program extends BaseEntity {
    * not the lifecycle state an NGO sees (Active / Closing / Full / Paused), which is
    * derived at read time from pausedAt, slot counts and expiresAt. Keeping the two
    * apart means a derived label can never go stale against the stored one.
+   *
+   * Starts at DRAFT: creating a programme no longer submits it. The NGO edits it
+   * until it is ready, then POST /programs/:id/submit moves it to PENDING_REVIEW.
    */
   @Column({
     name: 'status',
     type: 'varchar',
     enum: ProgramStatus,
-    default: ProgramStatus.PENDING_REVIEW,
+    default: ProgramStatus.DRAFT,
   })
   status: ProgramStatus;
 
@@ -86,4 +89,18 @@ export class Program extends BaseEntity {
    */
   @Column({ name: 'paused_at', type: 'timestamptz', nullable: true })
   pausedAt?: Date | null;
+
+  // ── Platform review outcome ────────────────────────────────────────────────
+  // Until now the admin's decision left no trace on the programme itself: the
+  // reason lived only inside an audit row, which the NGO cannot read. So a
+  // rejected programme could never tell its owner what to fix.
+
+  @Column({ name: 'rejection_reason', type: 'text', nullable: true })
+  rejectionReason?: string | null;
+
+  @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+  reviewedAt?: Date | null;
+
+  @Column({ name: 'reviewed_by', type: 'char', length: 26, nullable: true })
+  reviewedBy?: string | null;
 }

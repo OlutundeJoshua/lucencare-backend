@@ -35,6 +35,9 @@ const mockProgram = {
 
 const mockProgramsService = {
   create: jest.fn(),
+  submitForReview: jest.fn(),
+  update: jest.fn(),
+  getForOrg: jest.fn(),
   findByOrg: jest.fn(),
   findByIdForOrg: jest.fn(),
   getMatchPreview: jest.fn(),
@@ -172,6 +175,108 @@ describe('ProgramsController', () => {
   // ---------------------------------------------------------------------------
   // GET /organizations/:orgId/programs
   // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // POST /programs/:id/submit
+  // ---------------------------------------------------------------------------
+
+  describe('POST /programs/:id/submit', () => {
+    it('returns 201 and hands the org id from the JWT, not the body', async () => {
+      app = await buildApp();
+      mockProgramsService.submitForReview.mockResolvedValue({
+        ...mockProgram,
+        status: 'pending_review',
+      });
+
+      const res = await request(app.getHttpServer()).post(`/programs/${TEST_PROGRAM_ID}/submit`);
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.status).toBe('pending_review');
+      expect(mockProgramsService.submitForReview).toHaveBeenCalledWith(
+        TEST_PROGRAM_ID,
+        TEST_ORG_ID,
+        TEST_USER_ID,
+      );
+    });
+
+    it('returns 409 when the programme is not submittable', async () => {
+      app = await buildApp();
+      mockProgramsService.submitForReview.mockRejectedValue(
+        new ConflictException('This programme is already awaiting review'),
+      );
+
+      const res = await request(app.getHttpServer()).post(`/programs/${TEST_PROGRAM_ID}/submit`);
+
+      expect(res.status).toBe(409);
+    });
+
+    it('returns 403 when RoleGuard denies access', async () => {
+      app = await buildApp(denyGuard);
+
+      const res = await request(app.getHttpServer()).post(`/programs/${TEST_PROGRAM_ID}/submit`);
+
+      expect(res.status).toBe(403);
+      expect(mockProgramsService.submitForReview).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // PATCH /programs/:id — previously untested at HTTP level
+  // ---------------------------------------------------------------------------
+
+  describe('PATCH /programs/:id', () => {
+    it('returns 200 and passes the actor through for the audit row', async () => {
+      app = await buildApp();
+      mockProgramsService.update.mockResolvedValue({ ...mockProgram, title: 'Renamed' });
+
+      const res = await request(app.getHttpServer())
+        .patch(`/programs/${TEST_PROGRAM_ID}`)
+        .send({ title: 'Renamed' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.title).toBe('Renamed');
+      expect(mockProgramsService.update).toHaveBeenCalledWith(
+        TEST_PROGRAM_ID,
+        TEST_ORG_ID,
+        { title: 'Renamed' },
+        TEST_USER_ID,
+      );
+    });
+
+    it('returns 422 when an approved programme refuses the change', async () => {
+      app = await buildApp();
+      mockProgramsService.update.mockRejectedValue(
+        new UnprocessableEntityException('An approved programme cannot change title'),
+      );
+
+      const res = await request(app.getHttpServer())
+        .patch(`/programs/${TEST_PROGRAM_ID}`)
+        .send({ title: 'Renamed' });
+
+      expect(res.status).toBe(422);
+    });
+
+    it('returns 422 for a field outside the DTO', async () => {
+      app = await buildApp();
+
+      const res = await request(app.getHttpServer())
+        .patch(`/programs/${TEST_PROGRAM_ID}`)
+        .send({ status: 'approved' });
+
+      expect(res.status).toBe(422);
+      expect(mockProgramsService.update).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when RoleGuard denies access', async () => {
+      app = await buildApp(denyGuard);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/programs/${TEST_PROGRAM_ID}`)
+        .send({ title: 'Renamed' });
+
+      expect(res.status).toBe(403);
+    });
+  });
 
   describe('GET /organizations/:orgId/programs', () => {
     it('returns 200 with paginated programs', async () => {

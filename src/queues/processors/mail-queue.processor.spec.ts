@@ -10,12 +10,14 @@ import {
   SEND_OTP_JOB,
   SEND_PATIENT_CREDENTIALS_JOB,
   SEND_PATIENT_ONBOARDING_WELCOME_JOB,
+  SEND_PROGRAM_STATUS_JOB,
   SEND_RESET_PASSWORD_JOB,
 } from 'src/queues/queues.constants';
 
 import { MailQueueProcessor } from './mail-queue.processor';
 import { SendApplicationStatusProcessor } from './send-application-status.processor';
 import { SendEnrollmentOutcomeProcessor } from './send-enrollment-outcome.processor';
+import { SendProgramStatusProcessor } from './send-program-status.processor';
 import { SendAppointmentConfirmationProcessor } from './send-appointment-confirmation.processor';
 import { SendMedicationReminderEmailProcessor } from './send-medication-reminder-email.processor';
 import { SendOtpProcessor } from './send-otp.processor';
@@ -33,6 +35,7 @@ describe('MailQueueProcessor', () => {
   let sendResetPasswordProcessor: { process: jest.Mock };
   let sendApplicationStatusProcessor: { process: jest.Mock };
   let sendEnrollmentOutcomeProcessor: { process: jest.Mock };
+  let sendProgramStatusProcessor: { process: jest.Mock };
 
   beforeEach(async () => {
     sendOtpProcessor = { process: jest.fn() };
@@ -43,6 +46,7 @@ describe('MailQueueProcessor', () => {
     sendResetPasswordProcessor = { process: jest.fn() };
     sendApplicationStatusProcessor = { process: jest.fn() };
     sendEnrollmentOutcomeProcessor = { process: jest.fn() };
+    sendProgramStatusProcessor = { process: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -55,6 +59,7 @@ describe('MailQueueProcessor', () => {
         { provide: SendResetPasswordProcessor, useValue: sendResetPasswordProcessor },
         { provide: SendApplicationStatusProcessor, useValue: sendApplicationStatusProcessor },
         { provide: SendEnrollmentOutcomeProcessor, useValue: sendEnrollmentOutcomeProcessor },
+        { provide: SendProgramStatusProcessor, useValue: sendProgramStatusProcessor },
       ],
     }).compile();
 
@@ -116,6 +121,12 @@ describe('MailQueueProcessor', () => {
     const job = { name: SEND_ENROLLMENT_OUTCOME_JOB, data: {} } as Job;
     await processor.process(job);
     expect(sendEnrollmentOutcomeProcessor.process).toHaveBeenCalledWith(job);
+  });
+
+  it('routes send_program_status jobs to SendProgramStatusProcessor', async () => {
+    const job = { name: SEND_PROGRAM_STATUS_JOB, data: {} } as Job;
+    await processor.process(job);
+    expect(sendProgramStatusProcessor.process).toHaveBeenCalledWith(job);
   });
 
   it('does nothing for an unrecognized job name', async () => {

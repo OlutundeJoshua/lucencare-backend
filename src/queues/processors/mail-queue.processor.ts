@@ -10,6 +10,7 @@ import {
   SEND_OTP_JOB,
   SEND_PATIENT_CREDENTIALS_JOB,
   SEND_PATIENT_ONBOARDING_WELCOME_JOB,
+  SEND_PROGRAM_STATUS_JOB,
   SEND_RESET_PASSWORD_JOB,
   WORKER_POLL_OPTIONS,
 } from 'src/queues/queues.constants';
@@ -21,6 +22,7 @@ import { SendMedicationReminderEmailProcessor } from './send-medication-reminder
 import { SendOtpProcessor } from './send-otp.processor';
 import { SendPatientCredentialsProcessor } from './send-patient-credentials.processor';
 import { SendPatientOnboardingWelcomeProcessor } from './send-patient-onboarding-welcome.processor';
+import { SendProgramStatusProcessor } from './send-program-status.processor';
 import { SendResetPasswordProcessor } from './send-reset-password.processor';
 
 @Processor(MAIL_QUEUE, WORKER_POLL_OPTIONS)
@@ -34,6 +36,7 @@ export class MailQueueProcessor extends WorkerHost {
     private readonly sendResetPasswordProcessor: SendResetPasswordProcessor,
     private readonly sendApplicationStatusProcessor: SendApplicationStatusProcessor,
     private readonly sendEnrollmentOutcomeProcessor: SendEnrollmentOutcomeProcessor,
+    private readonly sendProgramStatusProcessor: SendProgramStatusProcessor,
   ) {
     super();
   }
@@ -56,6 +59,8 @@ export class MailQueueProcessor extends WorkerHost {
         return this.sendApplicationStatusProcessor.process(job);
       case SEND_ENROLLMENT_OUTCOME_JOB:
         return this.sendEnrollmentOutcomeProcessor.process(job);
+      case SEND_PROGRAM_STATUS_JOB:
+        return this.sendProgramStatusProcessor.process(job);
       default:
         return;
     }

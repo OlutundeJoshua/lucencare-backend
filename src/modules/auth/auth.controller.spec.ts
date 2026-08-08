@@ -147,7 +147,7 @@ describe('AuthController (integration)', () => {
           expect(body.accessToken).toBeDefined();
           expect(body.user).toBeDefined();
           expect(res.headers['set-cookie']).toBeDefined();
-          expect(res.headers['set-cookie'].join(',')).toContain('refresh_token');
+          expect([res.headers['set-cookie']].flat().join(',')).toContain('refresh_token');
         });
     });
 
@@ -238,7 +238,7 @@ describe('AuthController (integration)', () => {
     it('returns 200 with accessToken and Set-Cookie', () => {
       return request(app.getHttpServer())
         .post('/auth/login')
-        .send({ email: 'patient@example.com', password: 'password123' })
+        .send({ email: 'patient@example.com', password: 'password123', role: 'patient' })
         .expect(200)
         .expect((res) => {
           const body = res.body.data ?? res.body;
@@ -250,8 +250,34 @@ describe('AuthController (integration)', () => {
     it('returns 422 when email is missing', () => {
       return request(app.getHttpServer())
         .post('/auth/login')
-        .send({ password: 'password123' })
+        .send({ password: 'password123', role: 'patient' })
         .expect(422);
+    });
+
+    // role is required, so there is no code path that reaches the service without one.
+    it('returns 422 when role is missing', () => {
+      return request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: 'patient@example.com', password: 'password123' })
+        .expect(422);
+    });
+
+    it('returns 422 when role is not a known portal', () => {
+      return request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: 'patient@example.com', password: 'password123', role: 'superuser' })
+        .expect(422);
+    });
+
+    it('passes the role through to the service', async () => {
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: 'ngo@example.com', password: 'password123', role: 'ngo' })
+        .expect(200);
+
+      expect(mockAuthService.login).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'ngo@example.com', role: 'ngo' }),
+      );
     });
   });
 
@@ -266,7 +292,7 @@ describe('AuthController (integration)', () => {
           const body = res.body.data ?? res.body;
           expect(body.accessToken).toBeDefined();
           expect(res.headers['set-cookie']).toBeDefined();
-          expect(res.headers['set-cookie'].join(',')).toContain('refresh_token');
+          expect([res.headers['set-cookie']].flat().join(',')).toContain('refresh_token');
         });
     });
 

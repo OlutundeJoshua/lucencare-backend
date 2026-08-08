@@ -847,9 +847,25 @@ Multiple processors share a single queue and filter on `job.name`. Do not create
 
 Patient action (`POST /study-enrollments`) lives in `EnrollmentsModule`; researcher action (`POST /study-enrollments/:id/invite`) lives in `StudiesModule`. This preserves actor-ownership boundaries and avoids a circular import between the two modules. Both register a `StudyEnrollmentsController` — with different route handlers.
 
-### 11.6 PassportModule and JwtStrategy
+### 11.6 PassportModule, JwtStrategy and Per-Request Account Status
 
-`JwtAuthGuard` extends `AuthGuard('jwt')`. `PassportModule`, `passport-jwt`, and `JwtStrategy` are implemented at `src/modules/auth/strategies/jwt.strategy.ts`. The strategy validates RS256 JWTs using the public key from `ConfigService` (`jwt.publicKey`). JWT validation is **stateless** — `JwtStrategy.validate()` returns the decoded payload as-is; suspension is enforced at login only, not per-request.
+`JwtAuthGuard` extends `AuthGuard('jwt')`. `PassportModule`, `passport-jwt`, and `JwtStrategy` are implemented at `src/modules/auth/strategies/jwt.strategy.ts`. The strategy validates RS256 JWTs using the public key from `ConfigService` (`jwt.publicKey`).
+
+**Token verification is stateless; account status is not.** `JwtStrategy.validate()` still returns the decoded payload as-is — the token carries no `status` claim. `JwtAuthGuard` then performs a per-request lookup of `users.status` and rejects anything that is not `'active'`:
+
+- `'suspended'` → `403 Account suspended`
+- `'pending'` → `403 Account pending verification`
+- row missing → `401`
+
+This supersedes the earlier "suspension is enforced at login only" design. Enforcing at login alone meant a pending NGO admin or HMO coordinator could reach every endpoint their role allowed — including patient lookup and care events — and a suspended user could rotate refresh tokens indefinitely. Status is read live rather than added as a token claim so that an admin approval or suspension takes effect on the **next request**, not up to 15 minutes later when the access token expires.
+
+`refreshTokens()` additionally rejects `'suspended'` (but not `'pending'`, which is a legitimate session).
+
+**Opting out.** Routes a pending user legitimately needs are marked with `@AllowPending()` (`src/common/decorators/allow-pending.decorator.ts`), which skips the status check only: the five `POST /auth/onboarding/*` routes, `GET /auth/me`, `POST /auth/logout`, and `PATCH /applications/professional/me/bio`. **Never** put `@AllowPending()` on a route that returns or mutates platform data.
+
+Because the check lives in `JwtAuthGuard`, every authenticated route is covered automatically — a new endpoint is protected the moment it authenticates. It cannot be a global `APP_GUARD`: NestJS runs global guards before controller- and route-scoped ones, so `req.user` would not yet be populated.
+
+`CommonModule` is `@Global()` and exports `TypeOrmModule.forFeature([User])` so the guard can resolve `UserRepository` from any feature module. The lookup is a primary-key hit selecting two columns; if it ever profiles hot, cache it in Redis (see the comment in the guard for the invalidation points required).
 
 ### 11.7 `strictPropertyInitialization` Disabled Intentionally
 

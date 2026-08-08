@@ -2,13 +2,18 @@ import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
-import { OrgStatus } from 'src/common/enums';
+import { OrgStatus, OrgType } from 'src/common/enums';
 
 export class ListOrganizationsDto {
   @ApiPropertyOptional({ enum: OrgStatus, description: 'Filter by org status' })
   @IsOptional()
   @IsEnum(OrgStatus)
   status?: OrgStatus;
+
+  @ApiPropertyOptional({ enum: OrgType, description: 'Filter by org type' })
+  @IsOptional()
+  @IsEnum(OrgType)
+  type?: OrgType;
 
   @ApiPropertyOptional({ description: 'ULID cursor for keyset pagination' })
   @IsOptional()

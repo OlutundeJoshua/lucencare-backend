@@ -2,6 +2,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -25,6 +26,15 @@ import { ConsentImpact } from './interfaces/consent-impact.interface';
 
 // Valid state machine transitions. All others throw ConflictException (BR-1, BR-2).
 const VALID_TRANSITIONS: Partial<Record<ConsentStatus, ConsentStatus[]>> = {
+  // Declining at onboarding writes a NOT_GRANTED row. Without this edge that row is a
+  // one-way door: PATCH found no key (so every target 409'd) and POST /consents saw a
+  // non-revoked row and 409'd too — so a patient who unticked the box could never
+  // enrol in anything, ever. Turning your own declined grant on is the same act of
+  // consenting as ticking the box, just performed later.
+  //
+  // Deliberately the ONLY edge out of NOT_GRANTED: you cannot pause or revoke
+  // something you never granted.
+  [ConsentStatus.NOT_GRANTED]: [ConsentStatus.ACTIVE],
   [ConsentStatus.PENDING]: [ConsentStatus.ACTIVE],
   [ConsentStatus.ACTIVE]: [ConsentStatus.PAUSED, ConsentStatus.REVOKED],
   [ConsentStatus.PAUSED]: [ConsentStatus.ACTIVE, ConsentStatus.REVOKED],
@@ -32,6 +42,8 @@ const VALID_TRANSITIONS: Partial<Record<ConsentStatus, ConsentStatus[]>> = {
 
 @Injectable()
 export class ConsentsService {
+  private readonly logger = new Logger(ConsentsService.name);
+
   constructor(
     @InjectRepository(ConsentGrant)
     private readonly consentGrantRepo: Repository<ConsentGrant>,
@@ -91,12 +103,32 @@ export class ConsentsService {
       .createQueryBuilder('cg')
       .where('cg.patient_id = :patientId', { patientId })
       .andWhere('cg.purpose = :purpose', { purpose: dto.purpose })
-      .andWhere('cg.status != :revoked', { revoked: ConsentStatus.REVOKED })
+      .andWhere('cg.status NOT IN (:...openStatuses)', {
+        // A REVOKED grant is finished, and a NOT_GRANTED one was declined at
+        // onboarding — neither should block the patient from granting now. Without
+        // NOT_GRANTED here, a declined patient got a 409 they had no way to act on.
+        openStatuses: [ConsentStatus.REVOKED, ConsentStatus.NOT_GRANTED],
+      })
       .andWhere('cg.deleted_at IS NULL')
       .getOne();
 
     if (existing) {
       throw new ConflictException('A non-revoked consent grant already exists for this purpose');
+    }
+
+    // Reuse the declined row rather than leaving a stale NOT_GRANTED duplicate
+    // beside a new ACTIVE one — two rows for one purpose would make every
+    // "does this patient consent?" lookup ambiguous.
+    const declined = await this.consentGrantRepo
+      .createQueryBuilder('cg')
+      .where('cg.patient_id = :patientId', { patientId })
+      .andWhere('cg.purpose = :purpose', { purpose: dto.purpose })
+      .andWhere('cg.status = :notGranted', { notGranted: ConsentStatus.NOT_GRANTED })
+      .andWhere('cg.deleted_at IS NULL')
+      .getOne();
+
+    if (declined) {
+      return this.transition(declined.id, userId, { status: ConsentStatus.ACTIVE });
     }
 
     const grant = this.consentGrantRepo.create({
@@ -154,16 +186,43 @@ export class ConsentsService {
       return this.revokeAndCascade(consentGrantId, patientId);
     }
 
+    const previousStatus = grant.status;
     grant.status = dto.status;
 
+    // grantedAt was only ever stamped at create time, so a grant given after
+    // onboarding recorded no timestamp and the trail could not say when the patient
+    // actually consented. Stamp on first activation only — re-activating after a
+    // pause must not overwrite the original date.
+    if (dto.status === ConsentStatus.ACTIVE && !grant.grantedAt) {
+      grant.grantedAt = new Date();
+    }
+
+    let saved: ConsentGrant;
     try {
-      return await this.consentGrantRepo.save(grant);
+      saved = await this.consentGrantRepo.save(grant);
     } catch (err) {
       if (err instanceof OptimisticLockVersionMismatchError) {
         throw new ConflictException('Concurrent modification detected — please re-fetch and retry');
       }
       throw err;
     }
+
+    // CONSENT_CHANGE previously had zero call sites — only revocation was audited,
+    // so granting and pausing left no trace. Never let an audit failure undo a
+    // consent change the patient successfully made.
+    try {
+      await this.auditService.log({
+        actorId: patientId,
+        action: AuditAction.CONSENT_CHANGE,
+        resourceId: consentGrantId,
+        resourceType: 'ConsentGrant',
+        metadata: { from: previousStatus, to: dto.status, purpose: grant.purpose },
+      });
+    } catch (err) {
+      this.logger.error(`Failed to audit consent change ${consentGrantId}: ${(err as Error).message}`);
+    }
+
+    return saved;
   }
 
   /**
@@ -180,7 +239,9 @@ export class ConsentsService {
     let revokedGrant: ConsentGrant;
 
     await this.dataSource.transaction(async (manager) => {
-      await manager.query('SET LOCAL "app.user_id" = $1', [patientId]);
+      // See the note in EnrollmentsService: SET LOCAL cannot take a bind parameter,
+      // so this previously 500'd — meaning consent revocation never worked at all.
+      await manager.query(`SELECT set_config('app.user_id', $1, true)`, [patientId]);
 
       await manager
         .createQueryBuilder()

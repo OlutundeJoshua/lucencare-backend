@@ -5,6 +5,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditAction, DoseStatus, NotificationType } from 'src/common/enums';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
+import { ConfigService } from '@nestjs/config';
 import { PatientsService } from 'src/modules/patients/patients.service';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { User } from 'src/modules/auth/entities/user.entity';
@@ -79,6 +80,7 @@ describe('MedicationsService', () => {
   let patientsService: { getMyProfile: jest.Mock };
   let auditService: { log: jest.Mock };
   let notificationsService: { createOne: jest.Mock };
+  let configService: { get: jest.Mock };
 
   beforeEach(async () => {
     medicationRepo = {
@@ -104,6 +106,12 @@ describe('MedicationsService', () => {
     patientsService = { getMyProfile: jest.fn().mockResolvedValue(mockPatient) };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     notificationsService = { createOne: jest.fn().mockResolvedValue(undefined) };
+    // Matches the default tick cadence of */30. See the COUPLED PAIR note in app.config.ts.
+    configService = {
+      get: jest.fn((key: string) =>
+        key === 'app.medicationReminderWindowMinutes' ? 30 : undefined,
+      ),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -115,6 +123,7 @@ describe('MedicationsService', () => {
         { provide: PatientsService, useValue: patientsService },
         { provide: AuditService, useValue: auditService },
         { provide: NotificationsService, useValue: notificationsService },
+        { provide: ConfigService, useValue: configService },
       ],
     }).compile();
 
@@ -351,6 +360,168 @@ describe('MedicationsService', () => {
       patientRepo.find.mockResolvedValue([]);
       const targets = await service.findDueReminderTargets(new Date());
       expect(targets).toEqual([]);
+    });
+
+    // Dose times are free-form. Before the window, matching was an exact lookup
+    // against four fixed slots, so any other time NEVER produced a reminder.
+    describe('free-form dose times', () => {
+      /** One reminder-enabled patient in `timezone` with a single dose at `time`. */
+      function setup(time: string, timezone = 'Africa/Lagos') {
+        patientRepo.find.mockResolvedValue([{ ...mockPatient, timezone }]);
+        medicationRepo.find.mockResolvedValue([{ ...mockMedication, scheduleTimes: [time] }]);
+        userRepo.find.mockResolvedValue([{ id: USER_ID, email: 'patient@example.com' }]);
+      }
+
+      /** Lagos is UTC+1, so 09:00 local is 08:00 UTC. */
+      function lagosTick(hhmm: string): Date {
+        const [h, m] = hhmm.split(':').map(Number);
+        return new Date(Date.UTC(2026, 6, 17, h - 1, m, 0));
+      }
+
+      it('reminds a 9:15 AM dose on the 9:00 tick', async () => {
+        setup('9:15 AM');
+        const targets = await service.findDueReminderTargets(lagosTick('09:00'));
+        expect(targets).toHaveLength(1);
+        expect(targets[0].scheduledTime).toBe('9:15 AM');
+      });
+
+      // Exactly-once: the same dose must not also fire on the following tick.
+      it('does not remind the same 9:15 AM dose again on the 9:30 tick', async () => {
+        setup('9:15 AM');
+        const targets = await service.findDueReminderTargets(lagosTick('09:30'));
+        expect(targets).toEqual([]);
+      });
+
+      it('claims a dose exactly on the window boundary, and not the tick before', async () => {
+        setup('9:30 AM');
+        expect(await service.findDueReminderTargets(lagosTick('09:30'))).toHaveLength(1);
+        expect(await service.findDueReminderTargets(lagosTick('09:00'))).toEqual([]);
+      });
+
+      // The property that matters: full-day coverage with no gaps and no repeats.
+      it('fires every dose exactly once across a full day of 30-minute ticks', async () => {
+        const times = ['12:05 AM', '6:45 AM', '9:15 AM', '1:59 PM', '8:00 PM', '11:30 PM'];
+        patientRepo.find.mockResolvedValue([mockPatient]);
+        medicationRepo.find.mockResolvedValue([{ ...mockMedication, scheduleTimes: times }]);
+        userRepo.find.mockResolvedValue([{ id: USER_ID, email: 'patient@example.com' }]);
+
+        const fired: string[] = [];
+        for (let minutes = 0; minutes < 24 * 60; minutes += 30) {
+          const tick = lagosTick(
+            `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`,
+          );
+          const targets = await service.findDueReminderTargets(tick);
+          fired.push(...targets.map((t) => t.scheduledTime));
+        }
+
+        expect(fired.sort()).toEqual([...times].sort());
+      });
+
+      // A 45-minute offset never aligns with the tick, which is why the window is
+      // anchored to the patient's local time rather than to UTC.
+      it('still reminds a patient in a :45-offset timezone', async () => {
+        setup('9:15 AM', 'Asia/Kathmandu'); // UTC+5:45
+        // 09:00 Kathmandu == 03:15 UTC; window [09:00, 09:30) contains 09:15.
+        const targets = await service.findDueReminderTargets(new Date('2026-07-17T03:15:00.000Z'));
+        expect(targets).toHaveLength(1);
+      });
+
+      it('ignores a dose time it cannot parse instead of throwing', async () => {
+        setup('sometime in the morning');
+        await expect(service.findDueReminderTargets(lagosTick('09:00'))).resolves.toEqual([]);
+      });
+
+      describe('weekly doses', () => {
+        // 2026-07-17 is a Friday.
+        it('reminds on the named weekday', async () => {
+          setup('Friday · 9:15 AM');
+          const targets = await service.findDueReminderTargets(lagosTick('09:00'));
+          expect(targets).toHaveLength(1);
+          expect(targets[0].scheduledTime).toBe('Friday · 9:15 AM');
+        });
+
+        it('does not remind on any other weekday', async () => {
+          setup('Monday · 9:15 AM');
+          const targets = await service.findDueReminderTargets(lagosTick('09:00'));
+          expect(targets).toEqual([]);
+        });
+      });
+    });
+  });
+
+  describe('dose log creation', () => {
+    /** ensureDoseLogsForDate runs inside getSchedule; inspect what it inserts. */
+    function insertedRows(): Array<{ scheduledTime: string }> {
+      const qb = doseLogRepo.createQueryBuilder.mock.results[0]?.value;
+      return qb?.values.mock.calls[0]?.[0] ?? [];
+    }
+
+    it('creates a log for a weekly dose only on its own weekday', async () => {
+      medicationRepo.find.mockResolvedValue([
+        { ...mockMedication, frequency: 'Weekly', scheduleTimes: ['Monday · 8:00 AM'] },
+      ]);
+
+      // 2026-07-20 is a Monday.
+      await service.getSchedule(USER_ID, '2026-07-20');
+      expect(insertedRows().map((r) => r.scheduledTime)).toEqual(['Monday · 8:00 AM']);
+    });
+
+    // Previously a weekly medication was logged every day, so it looked due daily.
+    it('creates no log for a weekly dose on a different weekday', async () => {
+      medicationRepo.find.mockResolvedValue([
+        { ...mockMedication, frequency: 'Weekly', scheduleTimes: ['Monday · 8:00 AM'] },
+      ]);
+
+      // 2026-07-21 is a Tuesday.
+      const result = await service.getSchedule(USER_ID, '2026-07-21');
+      expect(result.slots).toEqual([]);
+      expect(doseLogRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('creates a log for every daily dose time', async () => {
+      medicationRepo.find.mockResolvedValue([mockMedication]);
+
+      await service.getSchedule(USER_ID, '2026-07-21');
+      expect(insertedRows().map((r) => r.scheduledTime)).toEqual(['8:00 AM', '8:00 PM']);
+    });
+  });
+
+  describe('schedule slot ordering', () => {
+    // localeCompare ordered these '10:00 PM' < '2:00 PM' < '8:00 AM'.
+    it('orders slots chronologically, not lexicographically', async () => {
+      medicationRepo.find.mockResolvedValue([mockMedication]);
+      doseLogRepo.find.mockResolvedValue(
+        ['10:00 PM', '2:00 PM', '8:00 AM', '9:15 AM'].map((scheduledTime, i) => ({
+          id: `log-${i}`,
+          medicationId: MEDICATION_ID,
+          patientId: PATIENT_ID,
+          doseDate: '2026-07-21',
+          scheduledTime,
+          status: DoseStatus.PENDING,
+        })),
+      );
+
+      const result = await service.getSchedule(USER_ID, '2026-07-21');
+
+      expect(result.slots.map((s) => s.time)).toEqual(['8:00 AM', '9:15 AM', '2:00 PM', '10:00 PM']);
+    });
+
+    it('sorts an unparseable slot last rather than dropping it', async () => {
+      medicationRepo.find.mockResolvedValue([mockMedication]);
+      doseLogRepo.find.mockResolvedValue(
+        ['whenever', '8:00 AM'].map((scheduledTime, i) => ({
+          id: `log-${i}`,
+          medicationId: MEDICATION_ID,
+          patientId: PATIENT_ID,
+          doseDate: '2026-07-21',
+          scheduledTime,
+          status: DoseStatus.PENDING,
+        })),
+      );
+
+      const result = await service.getSchedule(USER_ID, '2026-07-21');
+
+      expect(result.slots.map((s) => s.time)).toEqual(['8:00 AM', 'whenever']);
     });
   });
 });

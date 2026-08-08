@@ -1,6 +1,7 @@
 import { ulid } from 'ulid';
 
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
@@ -24,20 +25,22 @@ import { RefillAlertResult } from './interfaces/refill-alert-result.interface';
 import { MedicationStats } from './interfaces/medication-stats.interface';
 import { ReminderTarget } from './interfaces/reminder-target.interface';
 import { RefillAlertTarget } from './interfaces/refill-alert-target.interface';
+import { ParsedDoseTime } from './interfaces/parsed-dose-time.interface';
 
 const URGENT_THRESHOLD_DAYS = 7;
 const UPCOMING_THRESHOLD_DAYS = 14;
 const MAX_STREAK_LOOKBACK_DAYS = 365;
 const DUE_NOW_WINDOW_MINUTES = 15;
+const DEFAULT_REMINDER_WINDOW_MINUTES = 30;
 
-// The frontend only ever offers these 4 fixed dose-time slots — mapped to 24h
-// local time so the reminder tick can match against Intl-derived HH:mm.
-const SLOT_TIME_LABELS: Record<string, string> = {
-  '08:00': '8:00 AM',
-  '14:00': '2:00 PM',
-  '20:00': '8:00 PM',
-  '22:00': '10:00 PM',
-};
+/**
+ * A `scheduleTimes` entry: a 12-hour label, optionally prefixed with a weekday for
+ * weekly medications — `'8:00 AM'` or `'Monday · 8:00 AM'`.
+ *
+ * Dose times are free-form: the patient picks any time, so nothing here may assume a
+ * fixed set of slots.
+ */
+const DOSE_TIME_PATTERN = /^(?:([A-Za-z]+)\s*·\s*)?(\d{1,2}):(\d{2})\s*(AM|PM)$/i;
 
 @Injectable()
 export class MedicationsService {
@@ -57,6 +60,7 @@ export class MedicationsService {
     private readonly patientsService: PatientsService,
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
+    private readonly configService: ConfigService,
   ) {}
 
   async listMedications(userId: string): Promise<Medication[]> {
@@ -158,7 +162,15 @@ export class MedicationsService {
       });
     }
 
-    return { date: targetDate, slots: [...slots.values()].sort((a, b) => a.time.localeCompare(b.time)) };
+    // Ordered by parsed time, not string: localeCompare put '10:00 PM' before
+    // '2:00 PM' before '8:00 AM'. Unparseable labels sort last rather than vanish.
+    const byTime = [...slots.values()].sort((a, b) => {
+      const aMin = this.parseDoseTime(a.time)?.minutes ?? Number.MAX_SAFE_INTEGER;
+      const bMin = this.parseDoseTime(b.time)?.minutes ?? Number.MAX_SAFE_INTEGER;
+      return aMin - bMin || a.time.localeCompare(b.time);
+    });
+
+    return { date: targetDate, slots: byTime };
   }
 
   async logDose(userId: string, medicationId: string, dto: LogDoseDto): Promise<MedicationDoseLog> {
@@ -303,22 +315,43 @@ export class MedicationsService {
     const users = await this.userRepo.find({ where: { id: In(userIds) } });
     const emailByUserId = new Map(users.map((u) => [u.id, u.email]));
 
+    const windowMinutes = this.reminderWindowMinutes();
+
     const targets: ReminderTarget[] = [];
     for (const patient of patients) {
       const email = emailByUserId.get(patient.userId);
       if (!email) continue;
 
-      const slotLabel = this.currentSlotLabel(now, patient.timezone ?? 'UTC');
-      if (!slotLabel) continue;
+      // Anchored to the patient's own local time, not to the tick's wall clock:
+      // zones offset by 30 or 45 minutes (Asia/Kolkata, Asia/Kathmandu) never line
+      // up with the tick, so a window computed from UTC would drift for them.
+      const local = this.nowInTimezone(now, patient.timezone ?? 'UTC');
+      if (!local) continue;
 
       for (const med of medsByPatientId.get(patient.id) ?? []) {
-        if (med.scheduleTimes.includes(slotLabel)) {
-          targets.push({ email, medicationName: med.name, dosage: med.dosage, scheduledTime: slotLabel });
+        for (const scheduledTime of med.scheduleTimes) {
+          const parsed = this.parseDoseTime(scheduledTime);
+          if (!parsed || !this.appliesOnDate(parsed, local.dateIso)) continue;
+
+          // Half-open [now, now + window): each dose is claimed by exactly one tick,
+          // so no dose falls between two ticks and none is reminded twice. Matching
+          // on the parsed minute is what lets any time work, not just fixed slots.
+          const due = parsed.minutes >= local.minutes && parsed.minutes < local.minutes + windowMinutes;
+          if (!due) continue;
+
+          // The medication's own label, so the email states the time the patient chose.
+          targets.push({ email, medicationName: med.name, dosage: med.dosage, scheduledTime });
         }
       }
     }
 
     return targets;
+  }
+
+  /** See the COUPLED PAIR note in app.config.ts — must be >= the tick interval. */
+  private reminderWindowMinutes(): number {
+    const configured = this.configService.get<number>('app.medicationReminderWindowMinutes');
+    return configured && configured > 0 ? configured : DEFAULT_REMINDER_WINDOW_MINUTES;
   }
 
   // Called by medication-refill-check.processor.ts (daily).
@@ -342,23 +375,6 @@ export class MedicationsService {
     }
 
     return targets;
-  }
-
-  private currentSlotLabel(now: Date, timezone: string): string | undefined {
-    try {
-      const parts = new Intl.DateTimeFormat('en-GB', {
-        timeZone: timezone,
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      }).formatToParts(now);
-      const hour = parts.find((p) => p.type === 'hour')?.value;
-      const minute = parts.find((p) => p.type === 'minute')?.value;
-      if (!hour || !minute) return undefined;
-      return SLOT_TIME_LABELS[`${hour}:${minute}`];
-    } catch {
-      return undefined;
-    }
   }
 
   private nowInTimezone(now: Date, timezone: string): { dateIso: string; minutes: number } | undefined {
@@ -398,19 +414,41 @@ export class MedicationsService {
   ): DoseStatus {
     if (status !== DoseStatus.PENDING || !nowLocal || nowLocal.dateIso !== doseDate) return status;
 
-    const scheduledMinutes = this.parseTimeLabelToMinutes(scheduledTime);
-    if (scheduledMinutes === undefined) return status;
+    const parsed = this.parseDoseTime(scheduledTime);
+    if (!parsed) return status;
 
-    return Math.abs(nowLocal.minutes - scheduledMinutes) <= DUE_NOW_WINDOW_MINUTES ? DoseStatus.DUE_NOW : status;
+    return Math.abs(nowLocal.minutes - parsed.minutes) <= DUE_NOW_WINDOW_MINUTES
+      ? DoseStatus.DUE_NOW
+      : status;
   }
 
-  private parseTimeLabelToMinutes(label: string): number | undefined {
-    const match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(label.trim());
+  /**
+   * The single parser for `scheduleTimes` entries — used by the due-now overlay, the
+   * reminder window, dose-log creation and slot ordering. Returns undefined for a
+   * label it cannot read, and every caller treats that as "skip", never as an error:
+   * one unparseable row must not break a patient's whole schedule.
+   */
+  private parseDoseTime(label: string): ParsedDoseTime | undefined {
+    const match = DOSE_TIME_PATTERN.exec(label.trim());
     if (!match) return undefined;
 
-    let hour = Number(match[1]) % 12;
-    if (match[3].toUpperCase() === 'PM') hour += 12;
-    return hour * 60 + Number(match[2]);
+    let hour = Number(match[2]) % 12;
+    if (match[4].toUpperCase() === 'PM') hour += 12;
+    return { minutes: hour * 60 + Number(match[3]), weekday: match[1] };
+  }
+
+  /** Full weekday name for a plain ISO date, read in UTC so no timezone shifts it. */
+  private weekdayForIsoDate(dateIso: string): string {
+    return new Date(`${dateIso}T00:00:00Z`).toLocaleDateString('en-US', {
+      weekday: 'long',
+      timeZone: 'UTC',
+    });
+  }
+
+  /** True when a dose time applies on the given date — always, unless it names a day. */
+  private appliesOnDate(parsed: ParsedDoseTime, dateIso: string): boolean {
+    if (!parsed.weekday) return true;
+    return parsed.weekday.toLowerCase() === this.weekdayForIsoDate(dateIso).toLowerCase();
   }
 
   private async getOwnedMedication(userId: string, id: string): Promise<Medication> {
@@ -422,14 +460,21 @@ export class MedicationsService {
 
   private async ensureDoseLogsForDate(patientId: string, medications: Medication[], date: string): Promise<void> {
     const rows = medications.flatMap((med) =>
-      med.scheduleTimes.map((time) => ({
-        id: ulid(),
-        medicationId: med.id,
-        patientId,
-        doseDate: date,
-        scheduledTime: time,
-        status: DoseStatus.PENDING,
-      })),
+      med.scheduleTimes
+        // A weekly dose belongs to one weekday. Without this filter it was logged
+        // every day of the week, so a weekly medication looked due daily.
+        .filter((time) => {
+          const parsed = this.parseDoseTime(time);
+          return parsed ? this.appliesOnDate(parsed, date) : false;
+        })
+        .map((time) => ({
+          id: ulid(),
+          medicationId: med.id,
+          patientId,
+          doseDate: date,
+          scheduledTime: time,
+          status: DoseStatus.PENDING,
+        })),
     );
     if (rows.length === 0) return;
 

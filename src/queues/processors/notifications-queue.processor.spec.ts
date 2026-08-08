@@ -18,7 +18,6 @@ import { ConsentRevokedProcessor } from './consent-revoked.processor';
 import { FanOutNotifyProcessor } from './fan-out-notify.processor';
 import { MedicationRefillCheckProcessor } from './medication-refill-check.processor';
 import { MedicationReminderTickProcessor } from './medication-reminder-tick.processor';
-import { ProgramApprovedProcessor } from './program-approved.processor';
 import { StudyApprovedProcessor } from './study-approved.processor';
 
 describe('NotificationsQueueProcessor', () => {
@@ -26,7 +25,6 @@ describe('NotificationsQueueProcessor', () => {
   let fanOutNotifyProcessor: { process: jest.Mock };
   let batchNotifyProcessor: { process: jest.Mock };
   let consentRevokedProcessor: { process: jest.Mock };
-  let programApprovedProcessor: { process: jest.Mock };
   let studyApprovedProcessor: { process: jest.Mock };
   let medicationRefillCheckProcessor: { process: jest.Mock };
   let medicationReminderTickProcessor: { process: jest.Mock };
@@ -35,7 +33,6 @@ describe('NotificationsQueueProcessor', () => {
     fanOutNotifyProcessor = { process: jest.fn() };
     batchNotifyProcessor = { process: jest.fn() };
     consentRevokedProcessor = { process: jest.fn() };
-    programApprovedProcessor = { process: jest.fn() };
     studyApprovedProcessor = { process: jest.fn() };
     medicationRefillCheckProcessor = { process: jest.fn() };
     medicationReminderTickProcessor = { process: jest.fn() };
@@ -46,7 +43,6 @@ describe('NotificationsQueueProcessor', () => {
         { provide: FanOutNotifyProcessor, useValue: fanOutNotifyProcessor },
         { provide: BatchNotifyProcessor, useValue: batchNotifyProcessor },
         { provide: ConsentRevokedProcessor, useValue: consentRevokedProcessor },
-        { provide: ProgramApprovedProcessor, useValue: programApprovedProcessor },
         { provide: StudyApprovedProcessor, useValue: studyApprovedProcessor },
         { provide: MedicationRefillCheckProcessor, useValue: medicationRefillCheckProcessor },
         { provide: MedicationReminderTickProcessor, useValue: medicationReminderTickProcessor },
@@ -82,10 +78,11 @@ describe('NotificationsQueueProcessor', () => {
     expect(consentRevokedProcessor.process).toHaveBeenCalledWith(job);
   });
 
-  it('routes program_approved jobs to ProgramApprovedProcessor', async () => {
+  // Programme outcomes are produced on ADMIN_QUEUE, so routing them here matched
+  // nothing and removeOnComplete discarded them. They belong to AdminQueueProcessor.
+  it('ignores program_approved — it is not this queue\'s job', async () => {
     const job = { name: PROGRAM_APPROVED_JOB, data: {} } as Job;
-    await processor.process(job);
-    expect(programApprovedProcessor.process).toHaveBeenCalledWith(job);
+    await expect(processor.process(job)).resolves.toBeUndefined();
   });
 
   it('routes study_approved jobs to StudyApprovedProcessor', async () => {
@@ -112,7 +109,6 @@ describe('NotificationsQueueProcessor', () => {
     expect(fanOutNotifyProcessor.process).not.toHaveBeenCalled();
     expect(batchNotifyProcessor.process).not.toHaveBeenCalled();
     expect(consentRevokedProcessor.process).not.toHaveBeenCalled();
-    expect(programApprovedProcessor.process).not.toHaveBeenCalled();
     expect(studyApprovedProcessor.process).not.toHaveBeenCalled();
     expect(medicationRefillCheckProcessor.process).not.toHaveBeenCalled();
     expect(medicationReminderTickProcessor.process).not.toHaveBeenCalled();

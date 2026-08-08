@@ -14,6 +14,11 @@ export class User extends BaseEntity {
   @Column({ name: 'org_id', type: 'char', length: 26, nullable: true })
   orgId?: string;
 
+  // Display name for every role. PATIENT users additionally carry a name on the
+  // Patient entity, which stays the source of truth for them.
+  @Column({ name: 'name', type: 'text', nullable: true })
+  name?: string;
+
   @Column({ name: 'email', type: 'text', unique: true })
   email: string;
 

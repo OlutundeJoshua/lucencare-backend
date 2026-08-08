@@ -9,6 +9,10 @@ import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtPayload } from 'src/common/interfaces/jwt-payload.interface';
 import { ApplicationsService } from 'src/modules/applications/applications.service';
 import { ListApplicationsQueryDto, ReviewApplicationDto } from 'src/modules/applications/dto/applications.dto';
+import { AuditService } from 'src/modules/audit/audit.service';
+import { ListAuditDto } from 'src/modules/audit/dto/list-audit.dto';
+import { ListProgramsDto } from 'src/modules/programs/dto/list-programs.dto';
+import { ProgramsService } from 'src/modules/programs/programs.service';
 
 import { AdminService } from './admin.service';
 import { AdminApproveDto } from './dto/admin-approve.dto';
@@ -21,7 +25,20 @@ export class AdminController {
   constructor(
     private readonly adminService: AdminService,
     private readonly applicationsService: ApplicationsService,
+    private readonly auditService: AuditService,
+    // The review queue reads programmes across every org, which the NGO-scoped
+    // findByOrg cannot serve.
+    private readonly programsService: ProgramsService,
   ) {}
+
+  @Get('audit')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List audit log entries, newest first (keyset paginated)' })
+  @ApiResponse({ status: 200, description: 'Audit log entries' })
+  async listAudit(@Query() query: ListAuditDto) {
+    const { entries, nextCursor } = await this.auditService.findAll(query);
+    return { data: entries, meta: { cursor: nextCursor, limit: query.limit ?? 50 } };
+  }
 
   @Patch('organizations/:id')
   @ApiResponse({ status: 200, description: 'Organization approved or rejected' })
@@ -36,6 +53,16 @@ export class AdminController {
     @CurrentUser() user: JwtPayload,
   ) {
     return this.adminService.reviewOrganization(id, user.sub, dto);
+  }
+
+  @Get('programs')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List submitted programmes for review, newest first' })
+  @ApiResponse({ status: 200, description: 'Programmes awaiting or past review' })
+  async listPrograms(@Query() query: ListProgramsDto) {
+    // Drafts are excluded in the service: they are the NGO's private working copy.
+    const { programs, nextCursor } = await this.programsService.findAllForAdmin(query);
+    return { data: programs, meta: { cursor: nextCursor, limit: query.limit ?? 20 } };
   }
 
   @Patch('programs/:id')

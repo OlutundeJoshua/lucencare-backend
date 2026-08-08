@@ -4,7 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
 
 import { AppointmentConfirmationAction, AppointmentStatus, AppointmentType } from 'src/common/enums';
-import { MAIL_QUEUE, SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
+import { MAIL_JOB_OPTIONS, MAIL_QUEUE, SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
 import { PatientsService } from 'src/modules/patients/patients.service';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { User } from 'src/modules/auth/entities/user.entity';
@@ -117,6 +117,7 @@ describe('AppointmentsService', () => {
           provider: dto.provider,
           action: AppointmentConfirmationAction.CREATED,
         }),
+        MAIL_JOB_OPTIONS,
       );
       expect(result.status).toBe(AppointmentStatus.CONFIRMED);
     });
@@ -160,6 +161,7 @@ describe('AppointmentsService', () => {
       expect(mailQueue.add).toHaveBeenCalledWith(
         SEND_APPOINTMENT_CONFIRMATION_JOB,
         expect.objectContaining({ action: AppointmentConfirmationAction.RESCHEDULED }),
+        MAIL_JOB_OPTIONS,
       );
     });
 

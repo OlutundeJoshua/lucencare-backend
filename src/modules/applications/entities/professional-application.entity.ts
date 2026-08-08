@@ -28,6 +28,12 @@ export class ProfessionalApplication extends BaseEntity {
   @Column({ name: 'bio', type: 'text' })
   bio: string;
 
+  @Column({ name: 'terms_consent_at', type: 'timestamptz', nullable: true })
+  termsConsentAt?: Date;
+
+  @Column({ name: 'code_of_conduct_consent_at', type: 'timestamptz', nullable: true })
+  codeOfConductConsentAt?: Date;
+
   @Column({
     name: 'status',
     type: 'varchar',

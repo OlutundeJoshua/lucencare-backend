@@ -13,6 +13,7 @@ import * as request from 'supertest';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RoleGuard } from 'src/common/guards/role.guard';
 import { ProgramStatus, ProgramType } from 'src/common/enums';
+import { TransformInterceptor } from 'src/common/interceptors/transform.interceptor';
 
 import { OrgProgramsController, ProgramsController } from './programs.controller';
 import { ProgramsService } from './programs.service';
@@ -34,9 +35,14 @@ const mockProgram = {
 
 const mockProgramsService = {
   create: jest.fn(),
+  submitForReview: jest.fn(),
+  update: jest.fn(),
+  getForOrg: jest.fn(),
   findByOrg: jest.fn(),
   findByIdForOrg: jest.fn(),
   getMatchPreview: jest.fn(),
+  getOrgStats: jest.fn(),
+  getPatientMap: jest.fn(),
   getEnrollments: jest.fn(),
   triggerFanOut: jest.fn(),
   updateStatus: jest.fn(),
@@ -83,6 +89,10 @@ async function buildApp(roleGuardOverride = ngoAdminGuard): Promise<INestApplica
         }),
     }),
   );
+  // Registered so these tests see the real wire shape. Without it the spec asserted
+  // the controller's raw return, which is exactly how three handlers shipped
+  // double-wrapped as { data: { data } } without a single test noticing.
+  app.useGlobalInterceptors(new TransformInterceptor());
   await app.init();
   return app;
 }
@@ -166,6 +176,108 @@ describe('ProgramsController', () => {
   // GET /organizations/:orgId/programs
   // ---------------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------------
+  // POST /programs/:id/submit
+  // ---------------------------------------------------------------------------
+
+  describe('POST /programs/:id/submit', () => {
+    it('returns 201 and hands the org id from the JWT, not the body', async () => {
+      app = await buildApp();
+      mockProgramsService.submitForReview.mockResolvedValue({
+        ...mockProgram,
+        status: 'pending_review',
+      });
+
+      const res = await request(app.getHttpServer()).post(`/programs/${TEST_PROGRAM_ID}/submit`);
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.status).toBe('pending_review');
+      expect(mockProgramsService.submitForReview).toHaveBeenCalledWith(
+        TEST_PROGRAM_ID,
+        TEST_ORG_ID,
+        TEST_USER_ID,
+      );
+    });
+
+    it('returns 409 when the programme is not submittable', async () => {
+      app = await buildApp();
+      mockProgramsService.submitForReview.mockRejectedValue(
+        new ConflictException('This programme is already awaiting review'),
+      );
+
+      const res = await request(app.getHttpServer()).post(`/programs/${TEST_PROGRAM_ID}/submit`);
+
+      expect(res.status).toBe(409);
+    });
+
+    it('returns 403 when RoleGuard denies access', async () => {
+      app = await buildApp(denyGuard);
+
+      const res = await request(app.getHttpServer()).post(`/programs/${TEST_PROGRAM_ID}/submit`);
+
+      expect(res.status).toBe(403);
+      expect(mockProgramsService.submitForReview).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // PATCH /programs/:id — previously untested at HTTP level
+  // ---------------------------------------------------------------------------
+
+  describe('PATCH /programs/:id', () => {
+    it('returns 200 and passes the actor through for the audit row', async () => {
+      app = await buildApp();
+      mockProgramsService.update.mockResolvedValue({ ...mockProgram, title: 'Renamed' });
+
+      const res = await request(app.getHttpServer())
+        .patch(`/programs/${TEST_PROGRAM_ID}`)
+        .send({ title: 'Renamed' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.title).toBe('Renamed');
+      expect(mockProgramsService.update).toHaveBeenCalledWith(
+        TEST_PROGRAM_ID,
+        TEST_ORG_ID,
+        { title: 'Renamed' },
+        TEST_USER_ID,
+      );
+    });
+
+    it('returns 422 when an approved programme refuses the change', async () => {
+      app = await buildApp();
+      mockProgramsService.update.mockRejectedValue(
+        new UnprocessableEntityException('An approved programme cannot change title'),
+      );
+
+      const res = await request(app.getHttpServer())
+        .patch(`/programs/${TEST_PROGRAM_ID}`)
+        .send({ title: 'Renamed' });
+
+      expect(res.status).toBe(422);
+    });
+
+    it('returns 422 for a field outside the DTO', async () => {
+      app = await buildApp();
+
+      const res = await request(app.getHttpServer())
+        .patch(`/programs/${TEST_PROGRAM_ID}`)
+        .send({ status: 'approved' });
+
+      expect(res.status).toBe(422);
+      expect(mockProgramsService.update).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when RoleGuard denies access', async () => {
+      app = await buildApp(denyGuard);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/programs/${TEST_PROGRAM_ID}`)
+        .send({ title: 'Renamed' });
+
+      expect(res.status).toBe(403);
+    });
+  });
+
   describe('GET /organizations/:orgId/programs', () => {
     it('returns 200 with paginated programs', async () => {
       app = await buildApp();
@@ -215,6 +327,104 @@ describe('ProgramsController', () => {
       // req.user.orgId = TEST_ORG_ID, but we request a different org
       const res = await request(app.getHttpServer()).get(
         `/organizations/DIFFERENT_ORG_ZZZZZZZZZ/programs`,
+      );
+
+      expect(res.status).toBe(403);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /organizations/:orgId/stats
+  // ---------------------------------------------------------------------------
+
+  describe('GET /organizations/:orgId/stats', () => {
+    const stats = {
+      activePrograms: 2,
+      totalPrograms: 4,
+      totalApplicants: 31,
+      pendingReview: 7,
+      selectedPatients: 18,
+      waitlisted: 4,
+      rejected: 2,
+      budgetTotal: 1_850_000_000,
+      budgetDisbursed: 1_120_000_000,
+      slotsTotal: 90,
+      slotsFilled: 52,
+    };
+
+    it('returns 200 with the dashboard aggregates, wrapped once', async () => {
+      app = await buildApp();
+      mockProgramsService.getOrgStats.mockResolvedValue(stats);
+
+      const res = await request(app.getHttpServer()).get(`/organizations/${TEST_ORG_ID}/stats`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual(stats);
+      expect(res.body.data).not.toHaveProperty('data');
+    });
+
+    it('returns 403 when RoleGuard denies access', async () => {
+      app = await buildApp(denyGuard);
+
+      const res = await request(app.getHttpServer()).get(`/organizations/${TEST_ORG_ID}/stats`);
+
+      expect(res.status).toBe(403);
+      expect(mockProgramsService.getOrgStats).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 for another organisation’s stats', async () => {
+      app = await buildApp();
+
+      const res = await request(app.getHttpServer()).get(
+        `/organizations/DIFFERENT_ORG_ZZZZZZZZZ/stats`,
+      );
+
+      expect(res.status).toBe(403);
+      expect(mockProgramsService.getOrgStats).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /organizations/:orgId/patient-map
+  // ---------------------------------------------------------------------------
+
+  describe('GET /organizations/:orgId/patient-map', () => {
+    const mapRows = [
+      { state: 'Lagos', selected: 8, inReview: 3, waitlisted: 1, total: 12, topCondition: 'Hypertension' },
+      { state: 'Unspecified', selected: 1, inReview: 2, waitlisted: 0, total: 3 },
+    ];
+
+    it('returns 200 with aggregates and no patient-level fields', async () => {
+      app = await buildApp();
+      mockProgramsService.getPatientMap.mockResolvedValue(mapRows);
+
+      const res = await request(app.getHttpServer()).get(
+        `/organizations/${TEST_ORG_ID}/patient-map`,
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual(mapRows);
+      const body = JSON.stringify(res.body);
+      expect(body).not.toContain('patientId');
+      expect(body).not.toContain('sharedDataSnapshot');
+    });
+
+    it('returns 403 for another organisation’s map', async () => {
+      app = await buildApp();
+
+      const res = await request(app.getHttpServer()).get(
+        `/organizations/DIFFERENT_ORG_ZZZZZZZZZ/patient-map`,
+      );
+
+      expect(res.status).toBe(403);
+      expect(mockProgramsService.getPatientMap).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when RoleGuard denies access', async () => {
+      app = await buildApp(denyGuard);
+
+      const res = await request(app.getHttpServer()).get(
+        `/organizations/${TEST_ORG_ID}/patient-map`,
       );
 
       expect(res.status).toBe(403);
@@ -346,6 +556,8 @@ describe('ProgramsController', () => {
 
       expect(res.status).toBe(202);
       expect(res.body.data.message).toBe('Notification job queued');
+      // Guards the double-wrap regression: the payload must not be nested twice.
+      expect(res.body.data).not.toHaveProperty('data');
     });
 
     it('returns 403 when RoleGuard denies access', async () => {

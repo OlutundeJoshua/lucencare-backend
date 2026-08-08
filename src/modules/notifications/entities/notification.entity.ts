@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/notifications.md
-
 import { Entity, Column, Index } from 'typeorm';
 
 import { BaseEntity } from 'src/common/entities/base.entity';

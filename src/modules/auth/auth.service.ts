@@ -11,6 +11,7 @@ import {
   ForbiddenException,
   Injectable,
   Inject,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -20,17 +21,35 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource, Repository } from 'typeorm';
 import { Redis } from 'ioredis';
 
-import { AuditAction, ConsentPurpose, ConsentStatus, OrgStatus, OrgType, UserRole } from 'src/common/enums';
+import {
+  ApplicantRole,
+  ApplicationEmailEvent,
+  AuditAction,
+  ConsentPurpose,
+  ConsentStatus,
+  OrgStatus,
+  OrgType,
+  UserRole,
+} from 'src/common/enums';
 import { SNAPSHOT_FIELDS } from 'src/common/constants/snapshot-fields';
 import {
+  CLIENT_ROLE_TO_USER_ROLE,
+  USER_ROLE_TO_CLIENT_ROLE,
+} from 'src/common/constants/client-roles';
+import {
   ADMIN_QUEUE,
+  MAIL_JOB_OPTIONS,
   MAIL_QUEUE,
   ORG_VERIFICATION_JOB,
+  SEND_APPLICATION_STATUS_JOB,
   SEND_OTP_JOB,
   SEND_PATIENT_ONBOARDING_WELCOME_JOB,
   SEND_RESET_PASSWORD_JOB,
 } from 'src/queues/queues.constants';
+import { SendApplicationStatusJob } from 'src/queues/interfaces/send-application-status-job.interface';
 import { AuditService } from 'src/modules/audit/audit.service';
+import { ApplicationsService } from 'src/modules/applications/applications.service';
+import { OrganizationsService } from 'src/modules/organizations/organizations.service';
 
 import { User } from './entities/user.entity';
 import {
@@ -47,6 +66,7 @@ import {
   SignupDto,
 } from './dto/auth.dto';
 import { AuthPayload } from './interfaces/auth-payload.interface';
+import { MeResponse } from './interfaces/me-response.interface';
 
 // Assumption A-1: Patient and org registration use DataSource.transaction() with manager.getRepository()
 // directly for atomic cross-entity writes. PatientsService.createForUser() does not exist in the
@@ -64,6 +84,8 @@ const RESET_TOKEN_TTL_SECONDS = 3600; // 1 hour
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly dataSource: DataSource,
@@ -73,6 +95,8 @@ export class AuthService {
     @InjectQueue(MAIL_QUEUE) private readonly mailQueue: Queue,
     @InjectQueue(ADMIN_QUEUE) private readonly adminQueue: Queue,
     private readonly auditService: AuditService,
+    private readonly applicationsService: ApplicationsService,
+    private readonly organizationsService: OrganizationsService,
   ) {}
 
   async registerPatient(dto: RegisterPatientDto): Promise<AuthPayload> {
@@ -247,11 +271,11 @@ export class AuthService {
   async requestOtp(dto: RequestOtpDto): Promise<void> {
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     await this.redis.set(`otp:${dto.email}`, code, 'EX', OTP_TTL_SECONDS);
-    await this.mailQueue.add(SEND_OTP_JOB, {
-      to: dto.email,
-      code,
-      expiresInMinutes: OTP_TTL_SECONDS / 60,
-    });
+    await this.mailQueue.add(
+      SEND_OTP_JOB,
+      { to: dto.email, code, expiresInMinutes: OTP_TTL_SECONDS / 60 },
+      MAIL_JOB_OPTIONS,
+    );
   }
 
   async login(dto: LoginDto): Promise<AuthPayload> {
@@ -263,6 +287,18 @@ export class AuthService {
 
     const passwordMatch = await bcrypt.compare(dto.password, user.passwordHash);
     if (!passwordMatch) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // The portal is part of the credential: an account may only sign in from the
+    // tab matching its own role. Same generic 401 as a bad password (BR-8), so the
+    // login form cannot be used to discover whether an email is registered or
+    // which portal it belongs to.
+    //
+    // This MUST stay above the suspended check below, which throws a
+    // distinguishable 403 — otherwise probing a suspended account from the wrong
+    // portal would confirm both that it exists and that it is suspended.
+    if (user.role !== CLIENT_ROLE_TO_USER_ROLE[dto.role]) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -305,6 +341,14 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
+    // Without this a suspended user could rotate tokens indefinitely, since the
+    // status is otherwise only checked at login. A 'pending' user must still be able
+    // to refresh — they hold a valid session and need /auth/me and the onboarding
+    // routes, both of which are marked @AllowPending().
+    if (user.status === 'suspended') {
+      throw new ForbiddenException('Account suspended');
+    }
+
     const remainingTtl = payload.exp - Math.floor(Date.now() / 1000);
     if (remainingTtl > 0) {
       await this.redis.set(`refresh:revoked:${payload.jti}`, '1', 'EX', remainingTtl);
@@ -334,11 +378,11 @@ export class AuthService {
 
     const token = randomBytes(32).toString('hex');
     await this.redis.set(`reset:${token}`, user.id, 'EX', RESET_TOKEN_TTL_SECONDS);
-    await this.mailQueue.add(SEND_RESET_PASSWORD_JOB, {
-      to: dto.email,
-      token,
-      expiresInMinutes: RESET_TOKEN_TTL_SECONDS / 60,
-    });
+    await this.mailQueue.add(
+      SEND_RESET_PASSWORD_JOB,
+      { to: dto.email, token, expiresInMinutes: RESET_TOKEN_TTL_SECONDS / 60 },
+      MAIL_JOB_OPTIONS,
+    );
   }
 
   async resetPassword(dto: ResetPasswordDto): Promise<void> {
@@ -358,14 +402,9 @@ export class AuthService {
   async signupLite(dto: SignupDto): Promise<AuthPayload> {
     const saltRounds = this.configService.get<number>('app.bcryptSaltRounds', 12);
 
-    const roleMap: Record<string, UserRole> = {
-      patient: UserRole.PATIENT,
-      ngo: UserRole.NGO_ADMIN,
-      hmo: UserRole.HMO_COORDINATOR,
-      professional: UserRole.PROFESSIONAL,
-      benefactor: UserRole.BENEFACTOR,
-    };
-    const userRole = roleMap[dto.role];
+    // SignupDto restricts dto.role to SIGNUP_CLIENT_ROLES, so admin/researcher
+    // are unreachable here even though the shared map covers them.
+    const userRole = CLIENT_ROLE_TO_USER_ROLE[dto.role];
 
     const { user } = await this.dataSource.transaction(async (manager) => {
       const userRepo = manager.getRepository(User);
@@ -379,6 +418,7 @@ export class AuthService {
 
       const user = userRepo.create({
         role: userRole,
+        name: dto.name,
         email: dto.email,
         passwordHash,
         status: isPatient ? 'active' : 'pending',
@@ -445,6 +485,8 @@ export class AuthService {
         dateOfBirth: dto.dateOfBirth,
         gender: dto.biologicalSex ? (genderMap[dto.biologicalSex] as any) : undefined,
         country: dto.country,
+        locationState: dto.locationState,
+        locationLga: dto.locationLga,
         primaryLanguage: dto.primaryLanguage,
         conditionTags,
       });
@@ -474,28 +516,41 @@ export class AuthService {
     });
 
     if (user) {
-      await this.mailQueue.add(SEND_PATIENT_ONBOARDING_WELCOME_JOB, {
-        to: user.email,
-        patientName: patient.name,
-      });
+      await this.mailQueue.add(
+        SEND_PATIENT_ONBOARDING_WELCOME_JOB,
+        { to: user.email, patientName: patient.name },
+        MAIL_JOB_OPTIONS,
+      );
     }
 
     return patientRepo.findOne({ where: { userId } }) as Promise<object>;
   }
 
-  async completeNgoOnboarding(orgId: string, dto: NgoOnboardingDto): Promise<object> {
+  async completeNgoOnboarding(orgId: string, dto: NgoOnboardingDto, userId: string): Promise<object> {
     const orgRepo = this.dataSource.getRepository(Organization);
     const org = await orgRepo.findOne({ where: { id: orgId } });
     if (!org) throw new ConflictException('Organisation not found');
 
+    const now = new Date();
     await orgRepo.update({ id: orgId }, {
       name: dto.orgName,
       registrationNumber: dto.registrationNumber,
+      tin: dto.tin,
+      scumlNumber: dto.scumlNumber,
       focusAreas: dto.focusAreas,
       website: dto.website,
       operatingRegions: dto.operatingRegions,
       headOfficeCountry: dto.headOfficeCountry,
       programDescription: dto.programDescription,
+      termsConsentAt: now,
+      dataProcessingConsentAt: now,
+    });
+
+    await this.auditService.log({
+      actorId: userId,
+      action: AuditAction.APPLICATION_SUBMITTED,
+      resourceId: orgId,
+      resourceType: 'organization',
     });
 
     await this.adminQueue.add(ORG_VERIFICATION_JOB, {
@@ -504,14 +559,22 @@ export class AuthService {
       contactEmail: org.contactEmail,
     });
 
+    await this.sendApplicationStatusEmail({
+      to: org.contactEmail,
+      applicantName: dto.orgName,
+      role: ApplicantRole.NGO,
+      event: ApplicationEmailEvent.RECEIVED,
+    });
+
     return orgRepo.findOne({ where: { id: orgId } }) as Promise<object>;
   }
 
-  async completeHmoOnboarding(orgId: string, dto: HmoOnboardingDto): Promise<object> {
+  async completeHmoOnboarding(orgId: string, dto: HmoOnboardingDto, userId: string): Promise<object> {
     const orgRepo = this.dataSource.getRepository(Organization);
     const org = await orgRepo.findOne({ where: { id: orgId } });
     if (!org) throw new ConflictException('Organisation not found');
 
+    const now = new Date();
     await orgRepo.update({ id: orgId }, {
       name: dto.orgName,
       licenceNumber: dto.licenceNumber,
@@ -519,6 +582,15 @@ export class AuthService {
       coverageRegion: dto.coverageRegion,
       enrolledPatientCount: dto.enrolledPatientCount,
       specialtyFocus: dto.specialtyFocus,
+      termsConsentAt: now,
+      baaAcknowledgedAt: now,
+    });
+
+    await this.auditService.log({
+      actorId: userId,
+      action: AuditAction.APPLICATION_SUBMITTED,
+      resourceId: orgId,
+      resourceType: 'organization',
     });
 
     await this.adminQueue.add(ORG_VERIFICATION_JOB, {
@@ -527,18 +599,80 @@ export class AuthService {
       contactEmail: org.contactEmail,
     });
 
+    await this.sendApplicationStatusEmail({
+      to: org.contactEmail,
+      applicantName: dto.orgName,
+      // HMO, not NGO — both org types flow through near-identical methods and
+      // mislabelling the applicant here is the easy mistake.
+      role: ApplicantRole.HMO,
+      event: ApplicationEmailEvent.RECEIVED,
+    });
+
     return orgRepo.findOne({ where: { id: orgId } }) as Promise<object>;
   }
 
-  // For PATIENT users, name lives on the Patient entity, not User.
-  // Called at login and token refresh to keep the name fresh in the client-side auth state.
+  /**
+   * Enqueues an application email without letting a queue outage fail the request.
+   * The onboarding write has already committed by this point, so a thrown enqueue
+   * would report failure for work that actually succeeded.
+   */
+  private async sendApplicationStatusEmail(payload: SendApplicationStatusJob): Promise<void> {
+    try {
+      await this.mailQueue.add(SEND_APPLICATION_STATUS_JOB, payload, MAIL_JOB_OPTIONS);
+    } catch (err) {
+      this.logger.error(
+        `Failed to enqueue ${payload.event} email for ${payload.role}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  // Live account state for the authenticated user.
+  //
+  // Access tokens are stateless and carry no status claim, so a client holding a
+  // token issued before an admin approval has no way to learn it was approved.
+  // The frontend guards, pending screens and profile pages all read from here.
+  async getMe(userId: string): Promise<MeResponse> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    const me: MeResponse = {
+      id: user.id,
+      name: await this.resolveDisplayName(user),
+      email: user.email,
+      role: this.toClientRole(user.role),
+      status: user.status,
+      orgId: user.orgId,
+    };
+
+    if (user.role === UserRole.PROFESSIONAL) {
+      me.application = (await this.applicationsService.getProfessionalByUser(user.id)) ?? undefined;
+    } else if (user.role === UserRole.BENEFACTOR) {
+      me.application = (await this.applicationsService.getBenefactorByUser(user.id)) ?? undefined;
+    } else if (
+      (user.role === UserRole.NGO_ADMIN || user.role === UserRole.HMO_COORDINATOR) &&
+      user.orgId
+    ) {
+      // findOne throws if the org is missing; a user with a dangling orgId should
+      // still be able to read their own account state.
+      me.organization = await this.organizationsService
+        .findOne(user.orgId)
+        .catch(() => undefined);
+    }
+
+    return me;
+  }
+
+  // For PATIENT users, name lives on the Patient entity, which stays the source
+  // of truth for them (they can edit it via the patients API). Every other role
+  // reads users.name. Called at login and token refresh to keep the name fresh
+  // in the client-side auth state.
   private async resolveDisplayName(user: User): Promise<string | undefined> {
-    if (user.role !== UserRole.PATIENT) return undefined;
+    if (user.role !== UserRole.PATIENT) return user.name;
     const patient = await this.dataSource.getRepository(Patient).findOne({
       where: { userId: user.id },
       select: ['name'],
     });
-    return patient?.name;
+    return patient?.name ?? user.name;
   }
 
   private buildAuthPayload(user: User, name?: string): AuthPayload {
@@ -559,12 +693,7 @@ export class AuthService {
   // Maps internal UserRole enum values to the short-form strings the frontend Role type expects.
   // The JWT still carries the full internal role (ngo_admin, hmo_coordinator) for guards.
   private toClientRole(role: UserRole): string {
-    const map: Partial<Record<UserRole, string>> = {
-      [UserRole.NGO_ADMIN]: 'ngo',
-      [UserRole.HMO_COORDINATOR]: 'hmo',
-      [UserRole.PLATFORM_ADMIN]: 'admin',
-    };
-    return map[role] ?? role;
+    return USER_ROLE_TO_CLIENT_ROLE[role] ?? role;
   }
 
   private issueAccessToken(user: User): string {

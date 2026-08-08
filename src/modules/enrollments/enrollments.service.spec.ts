@@ -16,6 +16,10 @@ import { ConsentGrant } from 'src/modules/consents/entities/consent-grant.entity
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { Program } from 'src/modules/programs/entities/program.entity';
 import { Study } from 'src/modules/studies/entities/study.entity';
+import { User } from 'src/modules/auth/entities/user.entity';
+import { PaginationDto } from 'src/common/dto/pagination.dto';
+import { AuditService } from 'src/modules/audit/audit.service';
+import { NotificationsService } from 'src/modules/notifications/notifications.service';
 
 import { Enrollment } from './entities/enrollment.entity';
 import { StudyEnrollment } from './entities/study-enrollment.entity';
@@ -183,6 +187,13 @@ describe('EnrollmentsService', () => {
     create: jest.fn(),
     createQueryBuilder: jest.fn(),
   };
+  // Post-commit announcement deps: the NGO learns an application arrived. Default
+  // to "no programme / no staff" so existing tests take the early-return path.
+  const mockProgramRepo = { findOne: jest.fn().mockResolvedValue(null) };
+  const mockUserRepo = { find: jest.fn().mockResolvedValue([]) };
+  const mockAuditService = { log: jest.fn().mockResolvedValue(undefined) };
+  const mockNotificationsService = { createBulk: jest.fn().mockResolvedValue(undefined) };
+
   const mockPatientRepo = {
     findOne: jest.fn(),
     createQueryBuilder: jest.fn(),
@@ -198,9 +209,12 @@ describe('EnrollmentsService', () => {
         { provide: getRepositoryToken(Enrollment), useValue: mockEnrollmentRepo },
         { provide: getRepositoryToken(StudyEnrollment), useValue: mockStudyEnrollmentRepo },
         { provide: getRepositoryToken(Patient), useValue: mockPatientRepo },
-        { provide: getRepositoryToken(Program), useValue: {} },
+        { provide: getRepositoryToken(Program), useValue: mockProgramRepo },
         { provide: getRepositoryToken(Study), useValue: {} },
         { provide: getRepositoryToken(ConsentGrant), useValue: {} },
+        { provide: getRepositoryToken(User), useValue: mockUserRepo },
+        { provide: AuditService, useValue: mockAuditService },
+        { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: DataSource, useValue: mockDataSource },
       ],
     }).compile();
@@ -286,7 +300,11 @@ describe('EnrollmentsService', () => {
 
       const result = await service.createEnrollment(userId, dto);
       expect(result).toBe(saved);
-      expect(manager.query).toHaveBeenCalledWith('SET LOCAL "app.user_id" = $1', [patient.id]);
+      // set_config, not SET LOCAL: SET LOCAL cannot take a bind parameter.
+      expect(manager.query).toHaveBeenCalledWith(
+        `SELECT set_config('app.user_id', $1, true)`,
+        [patient.id],
+      );
     });
 
     it('throws 404 when patient profile not found', async () => {
@@ -320,6 +338,39 @@ describe('EnrollmentsService', () => {
       await expect(service.createEnrollment(userId, dto)).rejects.toBeInstanceOf(
         UnprocessableEntityException,
       );
+    });
+
+    // Paused and full are the two ways an approved programme stops taking
+    // applications. 409 rather than 422: the request is fine, the programme is shut.
+    it('throws 409 when the programme has paused intake', async () => {
+      const { manager } = buildManagerMock({
+        program: makeProgram({ pausedAt: new Date() }),
+        grant,
+      });
+      mockDataSource.transaction.mockImplementation((cb: Function) => cb(manager));
+
+      await expect(service.createEnrollment(userId, dto)).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('throws 409 when every place is taken', async () => {
+      const { manager } = buildManagerMock({
+        program: makeProgram({ slotsTotal: 10, slotsFilled: 10 }),
+        grant,
+      });
+      mockDataSource.transaction.mockImplementation((cb: Function) => cb(manager));
+
+      await expect(service.createEnrollment(userId, dto)).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('still accepts applications to an uncapped programme', async () => {
+      const { manager } = buildManagerMock({
+        program: makeProgram({ slotsTotal: undefined, slotsFilled: 500 }),
+        grant,
+        savedEntity: saved,
+      });
+      mockDataSource.transaction.mockImplementation((cb: Function) => cb(manager));
+
+      await expect(service.createEnrollment(userId, dto)).resolves.toBe(saved);
     });
 
     it('throws 422 when no active consent grant', async () => {
@@ -541,6 +592,70 @@ describe('EnrollmentsService', () => {
       await expect(
         service.advanceStudyEnrollment('nonexistent', StudyEnrollmentStatus.SCREENED),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  // ── listMyEnrollments — the patient's My Applications feed ─────────────────
+
+  describe('listMyEnrollments', () => {
+    const patient = makePatient();
+
+    /** Captures the select list so the payload's shape can be asserted. */
+    function buildListQb(rows: unknown[]) {
+      const qb: any = {
+        leftJoin: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue(rows),
+      };
+      return qb;
+    }
+
+    beforeEach(() => {
+      mockPatientRepo.createQueryBuilder.mockReturnValue(buildQbChain(patient));
+      mockPatientRepo.findOne.mockResolvedValue(patient);
+    });
+
+    // Without these the patient is reviewing an application they can no longer
+    // read anything about — just a title and two dates.
+    it('carries the programme description the patient decided on', async () => {
+      const qb = buildListQb([]);
+      mockEnrollmentRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.listMyEnrollments('user-id-0000000000001', { limit: 20 } as PaginationDto);
+
+      const selected = qb.select.mock.calls.flat(2).join(' ');
+      expect(selected).toContain('p.description');
+      expect(selected).toContain('p.focus');
+      expect(selected).toContain('p.donor');
+      expect(selected).toContain('p.coordinator');
+      // Already there, and the only human-readable org name a patient ever gets.
+      expect(selected).toContain('o.name');
+    });
+
+    it('scopes to the caller and skips deleted rows', async () => {
+      const qb = buildListQb([]);
+      mockEnrollmentRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.listMyEnrollments('user-id-0000000000001', { limit: 20 } as PaginationDto);
+
+      expect(qb.where).toHaveBeenCalledWith('e.patient_id = :patientId', { patientId: patient.id });
+      expect(qb.andWhere).toHaveBeenCalledWith('e.deleted_at IS NULL');
+    });
+
+    it('pages forward from the cursor', async () => {
+      const qb = buildListQb([{ id: 'E1' }, { id: 'E2' }, { id: 'E3' }]);
+      mockEnrollmentRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.listMyEnrollments('user-id-0000000000001', {
+        limit: 2,
+      } as PaginationDto);
+
+      expect(result.enrollments).toHaveLength(2);
+      expect(result.nextCursor).toBe('E2');
     });
   });
 });

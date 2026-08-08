@@ -3,13 +3,18 @@ import { Job } from 'bullmq';
 
 import {
   ADMIN_QUEUE,
+  APPLICATION_REVIEW_JOB,
   ORG_VERIFICATION_JOB,
+  PROGRAM_APPROVED_JOB,
+  PROGRAM_REJECTED_JOB,
   PROGRAM_REVIEW_JOB,
   STUDY_REVIEW_JOB,
   WORKER_POLL_OPTIONS,
 } from 'src/queues/queues.constants';
 
+import { ApplicationReviewProcessor } from './application-review.processor';
 import { OrgVerificationProcessor } from './org-verification.processor';
+import { ProgramOutcomeProcessor } from './program-outcome.processor';
 import { ProgramReviewProcessor } from './program-review.processor';
 import { StudyReviewProcessor } from './study-review.processor';
 
@@ -19,6 +24,8 @@ export class AdminQueueProcessor extends WorkerHost {
     private readonly orgVerificationProcessor: OrgVerificationProcessor,
     private readonly studyReviewProcessor: StudyReviewProcessor,
     private readonly programReviewProcessor: ProgramReviewProcessor,
+    private readonly programOutcomeProcessor: ProgramOutcomeProcessor,
+    private readonly applicationReviewProcessor: ApplicationReviewProcessor,
   ) {
     super();
   }
@@ -31,6 +38,13 @@ export class AdminQueueProcessor extends WorkerHost {
         return this.studyReviewProcessor.process(job);
       case PROGRAM_REVIEW_JOB:
         return this.programReviewProcessor.process(job);
+      // Both outcomes are produced by AdminService onto THIS queue. They were
+      // handled only on NOTIFICATIONS_QUEUE, so every one was silently dropped.
+      case PROGRAM_APPROVED_JOB:
+      case PROGRAM_REJECTED_JOB:
+        return this.programOutcomeProcessor.process(job);
+      case APPLICATION_REVIEW_JOB:
+        return this.applicationReviewProcessor.process(job);
       default:
         return;
     }

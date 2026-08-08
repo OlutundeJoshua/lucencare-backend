@@ -47,6 +47,9 @@ export class MatchingService {
       .createQueryBuilder('p')
       .where('p.status = :approved', { approved: ProgramStatus.APPROVED })
       .andWhere('p.expires_at > NOW()')
+      // Recommending a programme that has stopped taking applications wastes the
+      // patient's time — the same rule browseForPatient applies.
+      .andWhere('p.paused_at IS NULL')
       .andWhere('p.deleted_at IS NULL')
       .andWhere(
         `EXISTS (
@@ -268,8 +271,6 @@ export class MatchingService {
         qb.andWhere(`${alias}.medication_list @> :${paramName}::jsonb`, {
           [paramName]: JSON.stringify(value),
         });
-      } else if (field === 'locationState' || field === 'locationLga') {
-        // TODO: Patient entity has no locationState/locationLga columns yet — skip until added
       } else {
         // Generic column mapping for other fields
         const col = this.fieldToColumn(field);
@@ -300,6 +301,11 @@ export class MatchingService {
       gender: 'gender',
       dateOfBirth: 'date_of_birth',
       membershipNumber: 'membership_number',
+      // Until these columns existed, a location criterion was skipped rather than
+      // applied — so a programme scoped to one state matched every patient on the
+      // platform. A patient with no location now simply fails the criterion.
+      locationState: 'location_state',
+      locationLga: 'location_lga',
     };
     return map[field] ?? null;
   }
@@ -318,8 +324,16 @@ export class MatchingService {
           Object.entries(target as object).every(([k, v]) => (m as Record<string, unknown>)[k] === v),
         );
         if (!matches) return false;
+      } else if (field === 'locationState' || field === 'locationLga') {
+        // Mirrors the SQL path in buildCriteriaWhere: a patient with no location
+        // recorded does not satisfy a location criterion.
+        const actual = field === 'locationState' ? patient.locationState : patient.locationLga;
+        if (!actual) return false;
+        const expected = Array.isArray(value) ? value : [value];
+        const matches =
+          operator === 'in' ? expected.includes(actual) : actual === (value as string);
+        if (!matches) return false;
       }
-      // locationState/locationLga: no column on Patient yet — criteria ignored
     }
     return true;
   }

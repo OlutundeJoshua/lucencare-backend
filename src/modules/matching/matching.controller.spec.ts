@@ -11,14 +11,22 @@ import * as request from 'supertest';
 
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RoleGuard } from 'src/common/guards/role.guard';
+import { TransformInterceptor } from 'src/common/interceptors/transform.interceptor';
 
 import { MatchingController } from './matching.controller';
 import { MatchingService } from './matching.service';
 
 const TEST_PATIENT_USER_ID = '01HZZZZZZZZZZZZZZZZZZZZZAA';
 
-const mockPaginatedPrograms = { items: [{ id: '01HZZZZZZZZZZZZZZZZZZZZZAB', title: 'Test Program' }] };
-const mockPaginatedStudies = { items: [{ id: '01HZZZZZZZZZZZZZZZZZZZZZAC', title: 'Test Study' }] };
+// The service returns { data, nextCursor }; the controller reshapes it into the
+// { data, meta } envelope the interceptor understands.
+const mockPaginatedPrograms = {
+  data: [{ id: '01HZZZZZZZZZZZZZZZZZZZZZAB', title: 'Test Program' }],
+  nextCursor: '01HZZZZZZZZZZZZZZZZZZZZZAB',
+};
+const mockPaginatedStudies = {
+  data: [{ id: '01HZZZZZZZZZZZZZZZZZZZZZAC', title: 'Test Study' }],
+};
 
 const mockMatchingService = {
   findMatchingPrograms: jest.fn(),
@@ -67,6 +75,9 @@ async function buildApp(roleGuardOverride = allowAllGuard): Promise<INestApplica
         }),
     }),
   );
+  // Registered so these tests see the real wire shape — without it a double-wrapped
+  // { data: { data: [...] } } body passes unnoticed.
+  app.useGlobalInterceptors(new TransformInterceptor());
   await app.init();
   return app;
 }
@@ -100,6 +111,9 @@ describe('MatchingController', () => {
       const res = await request(app.getHttpServer()).get('/recommendations/funding');
 
       expect(res.status).toBe(200);
+      expect(res.body.data).toEqual(mockPaginatedPrograms.data);
+      expect(res.body.data).not.toHaveProperty('data');
+      expect(res.body.meta.cursor).toBe(mockPaginatedPrograms.nextCursor);
       expect(mockMatchingService.findMatchingPrograms).toHaveBeenCalledWith(
         TEST_PATIENT_USER_ID,
         expect.objectContaining({ limit: 20 }),
@@ -146,6 +160,8 @@ describe('MatchingController', () => {
       const res = await request(app.getHttpServer()).get('/recommendations/studies');
 
       expect(res.status).toBe(200);
+      expect(res.body.data).toEqual(mockPaginatedStudies.data);
+      expect(res.body.meta.cursor).toBeUndefined();
       expect(mockMatchingService.findStudies).toHaveBeenCalledWith(
         TEST_PATIENT_USER_ID,
         expect.objectContaining({ limit: 20 }),

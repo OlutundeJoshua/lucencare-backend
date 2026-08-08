@@ -9,7 +9,8 @@ import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { Program } from 'src/modules/programs/entities/program.entity';
 import { Study } from 'src/modules/studies/entities/study.entity';
 
-import { EligibilityCriterion, MatchingService } from './matching.service';
+import { MatchingService } from './matching.service';
+import { EligibilityCriterion } from './interfaces/eligibility-criterion.interface';
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -126,13 +127,32 @@ describe('MatchingService', () => {
       expect((qb as any).andWhere).toHaveBeenCalledTimes(2);
     });
 
-    it('skips locationState and locationLga (no-op)', () => {
+    // These were skipped while Patient had no location columns, which meant a
+    // programme scoped to one state silently matched every patient on the platform.
+    it('filters on locationState and locationLga', () => {
       const criteria: EligibilityCriterion[] = [
         { field: 'locationState', operator: 'eq', value: 'Lagos' },
         { field: 'locationLga', operator: 'eq', value: 'Ikeja' },
       ];
       service.buildCriteriaWhere(criteria, 'p', qb);
-      expect((qb as any).andWhere).not.toHaveBeenCalled();
+
+      expect((qb as any).andWhere).toHaveBeenCalledWith('p.location_state = :crit_0_val', {
+        crit_0_val: 'Lagos',
+      });
+      expect((qb as any).andWhere).toHaveBeenCalledWith('p.location_lga = :crit_1_val', {
+        crit_1_val: 'Ikeja',
+      });
+    });
+
+    it('supports a multi-state criterion with operator "in"', () => {
+      const criteria: EligibilityCriterion[] = [
+        { field: 'locationState', operator: 'in', value: ['Lagos', 'Oyo'] },
+      ];
+      service.buildCriteriaWhere(criteria, 'p', qb);
+
+      expect((qb as any).andWhere).toHaveBeenCalledWith('p.location_state IN (:...crit_0_val)', {
+        crit_0_val: ['Lagos', 'Oyo'],
+      });
     });
 
     it('handles eq operator for known generic fields', () => {
@@ -320,6 +340,45 @@ describe('MatchingService', () => {
       await expect(service.findMatchingPrograms(userId, { limit: 20 })).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+
+    // The JS-side filter must agree with the SQL one, or a programme reads as
+    // matching on one path and not the other.
+    describe('location criteria, evaluated in JS', () => {
+      const stateScoped = makeProgram({
+        eligibilityCriteria: [{ field: 'locationState', operator: 'eq', value: 'Lagos' }],
+      });
+
+      function withPatient(patient: Patient) {
+        mockPatientRepo.createQueryBuilder.mockReturnValue(buildQbChain([patient], patient));
+        mockPatientRepo.findOne.mockResolvedValue(patient);
+        mockProgramRepo.createQueryBuilder.mockReturnValue(buildQbChain([stateScoped]));
+      }
+
+      it('matches a patient in the programme’s state', async () => {
+        withPatient(makePatient({ locationState: 'Lagos' }));
+
+        const result = await service.findMatchingPrograms(userId, { limit: 20 });
+
+        expect(result.data).toHaveLength(1);
+      });
+
+      it('excludes a patient in a different state', async () => {
+        withPatient(makePatient({ locationState: 'Kano' }));
+
+        const result = await service.findMatchingPrograms(userId, { limit: 20 });
+
+        expect(result.data).toHaveLength(0);
+      });
+
+      // Previously an unlocated patient matched every state-scoped programme.
+      it('excludes a patient with no location recorded', async () => {
+        withPatient(makePatient({ locationState: undefined }));
+
+        const result = await service.findMatchingPrograms(userId, { limit: 20 });
+
+        expect(result.data).toHaveLength(0);
+      });
     });
   });
 

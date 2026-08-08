@@ -13,6 +13,8 @@ import * as request from 'supertest';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RoleGuard } from 'src/common/guards/role.guard';
 import { ApplicationsService } from 'src/modules/applications/applications.service';
+import { AuditService } from 'src/modules/audit/audit.service';
+import { ProgramsService } from 'src/modules/programs/programs.service';
 
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
@@ -38,6 +40,16 @@ const mockApplicationsService = {
   reviewBenefactor: jest.fn(),
 };
 
+const mockAuditService = {
+  findAll: jest.fn(),
+};
+
+// The review queue lists programmes across every org, which the NGO-scoped
+// findByOrg cannot serve — so the controller reaches ProgramsService directly.
+const mockProgramsService = {
+  findAllForAdmin: jest.fn(),
+};
+
 // Populates request.user so @CurrentUser() resolves to a valid JWT payload
 const allowAllGuard = {
   canActivate: (context: ExecutionContext) => {
@@ -59,6 +71,8 @@ async function buildApp(roleGuardOverride = allowAllGuard): Promise<INestApplica
     providers: [
       { provide: AdminService, useValue: mockAdminService },
       { provide: ApplicationsService, useValue: mockApplicationsService },
+      { provide: AuditService, useValue: mockAuditService },
+      { provide: ProgramsService, useValue: mockProgramsService },
     ],
   })
     .overrideGuard(JwtAuthGuard)
@@ -186,6 +200,61 @@ describe('AdminController', () => {
       const res = await request(app.getHttpServer())
         .patch('/admin/organizations/01HZZZZZZZZZZZZZZZZZZZZZAB')
         .send({ status: 'rejected' });
+
+      expect(res.status).toBe(422);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /admin/programs
+  // ---------------------------------------------------------------------------
+
+  describe('GET /admin/programs', () => {
+    const row = {
+      id: mockProgram.id,
+      title: 'Chronic Care Fund',
+      status: 'pending_review',
+      orgName: 'Hope Health',
+    };
+
+    it('returns the review queue with pagination meta', async () => {
+      app = await buildApp();
+      mockProgramsService.findAllForAdmin.mockResolvedValue({
+        programs: [row],
+        nextCursor: mockProgram.id,
+      });
+
+      const res = await request(app.getHttpServer()).get('/admin/programs');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([row]);
+      expect(res.body.meta.cursor).toBe(mockProgram.id);
+    });
+
+    it('passes the status filter through', async () => {
+      app = await buildApp();
+      mockProgramsService.findAllForAdmin.mockResolvedValue({ programs: [] });
+
+      await request(app.getHttpServer()).get('/admin/programs?status=pending_review');
+
+      expect(mockProgramsService.findAllForAdmin).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'pending_review' }),
+      );
+    });
+
+    it('returns 403 when RoleGuard denies access', async () => {
+      app = await buildApp(denyGuard);
+
+      const res = await request(app.getHttpServer()).get('/admin/programs');
+
+      expect(res.status).toBe(403);
+      expect(mockProgramsService.findAllForAdmin).not.toHaveBeenCalled();
+    });
+
+    it('returns 422 for a status outside the enum', async () => {
+      app = await buildApp();
+
+      const res = await request(app.getHttpServer()).get('/admin/programs?status=nonsense');
 
       expect(res.status).toBe(422);
     });

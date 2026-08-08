@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/enrollments.md
-
 import { Entity, Column, Index, VersionColumn } from 'typeorm';
 
 import { BaseEntity } from 'src/common/entities/base.entity';
@@ -29,6 +27,19 @@ export class Enrollment extends BaseEntity {
 
   @Column({ name: 'shared_data_snapshot', type: 'jsonb' })
   sharedDataSnapshot: object;
+
+  // ── NGO review ─────────────────────────────────────────────────────────────
+
+  /** Required when status is REJECTED — the patient is told why. */
+  @Column({ name: 'rejection_reason', type: 'text', nullable: true })
+  rejectionReason?: string | null;
+
+  @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+  reviewedAt?: Date | null;
+
+  /** The NGO staff user who decided. */
+  @Column({ name: 'reviewed_by', type: 'char', length: 26, nullable: true })
+  reviewedBy?: string | null;
 
   @VersionColumn({ name: 'version' })
   version: number;

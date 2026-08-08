@@ -53,11 +53,35 @@ export enum ProgramType {
 }
 
 export enum ProgramStatus {
+  // The NGO is still preparing it. Invisible to patients AND to the admin queue —
+  // creating a programme no longer submits it; POST /programs/:id/submit does.
+  DRAFT = 'draft',
   PENDING_REVIEW = 'pending_review',
   APPROVED = 'approved',
   REJECTED = 'rejected',
   EXPIRED = 'expired',
 }
+
+/**
+ * The states an NGO may hand to the platform for review. Rejected is included on
+ * purpose: fixing what the reviewer objected to and resubmitting is the point of
+ * recording a reason, and without this edge a rejection is terminal.
+ */
+export const SUBMITTABLE_PROGRAM_STATUSES = [
+  ProgramStatus.DRAFT,
+  ProgramStatus.REJECTED,
+] as const;
+
+/**
+ * The states an NGO may still edit freely. Once approved a programme is public and
+ * patients have applied under its stated terms, so only pause/resume and extending
+ * the closing date remain — see ProgramsService.update().
+ */
+export const EDITABLE_PROGRAM_STATUSES = [
+  ProgramStatus.DRAFT,
+  ProgramStatus.PENDING_REVIEW,
+  ProgramStatus.REJECTED,
+] as const;
 
 export enum StudyStatus {
   PENDING_REVIEW = 'pending_review',
@@ -68,10 +92,39 @@ export enum StudyStatus {
 }
 
 export enum EnrollmentStatus {
+  /** Applied and awaiting the NGO's decision. */
   ACTIVE = 'active',
+  /** The NGO accepted the patient onto the programme; occupies a slot. */
+  SELECTED = 'selected',
+  /** Held in reserve — still a live application, but not occupying a slot. */
+  WAITLISTED = 'waitlisted',
+  /** The NGO declined; enrollments.rejection_reason carries why. */
+  REJECTED = 'rejected',
   REVOKED_BY_PATIENT = 'revoked_by_patient',
   EXPIRED = 'expired',
 }
+
+/**
+ * Statuses an NGO reviewer may set. Excludes `active` (the applicant sets that by
+ * applying), `revoked_by_patient` (the patient's alone) and `expired` (the system's).
+ */
+export const REVIEWABLE_ENROLLMENT_STATUSES = [
+  EnrollmentStatus.SELECTED,
+  EnrollmentStatus.WAITLISTED,
+  EnrollmentStatus.REJECTED,
+] as const;
+export type ReviewableEnrollmentStatus = (typeof REVIEWABLE_ENROLLMENT_STATUSES)[number];
+
+/**
+ * A live application — one the patient is still in the running for. Used to stop a
+ * patient holding two open applications to the same programme, while still letting
+ * someone rejected or withdrawn apply again later.
+ */
+export const LIVE_ENROLLMENT_STATUSES = [
+  EnrollmentStatus.ACTIVE,
+  EnrollmentStatus.SELECTED,
+  EnrollmentStatus.WAITLISTED,
+] as const;
 
 export enum StudyEnrollmentStatus {
   INTERESTED = 'interested',
@@ -102,14 +155,27 @@ export enum HmoLinkRequestStatus {
 
 export enum NotificationType {
   PROGRAM_MATCH = 'program_match',
+  // A patient applied to an NGO's programme — sent to that NGO's staff. Distinct
+  // from PROGRAM_MATCH, which travels the other way (a programme suggested to a
+  // patient) and would otherwise render the wrong copy in the NGO's feed.
+  ENROLLMENT_APPLICATION = 'enrollment_application',
+  // The NGO's decision on that application — sent to the patient.
   ENROLLMENT_UPDATE = 'enrollment_update',
   CONSENT_REVOKED = 'consent_revoked',
   NEW_MESSAGE = 'new_message',
   STUDY_MATCH = 'study_match',
   ORG_VERIFIED = 'org_verified',
+  ORG_PENDING_VERIFICATION = 'org_pending_verification',
   HMO_LINK_REQUEST = 'hmo_link_request',
   MEDICATION_REMINDER = 'medication_reminder',
   REFILL_ALERT = 'refill_alert',
+  // A professional or benefactor application is awaiting review. The org-shaped
+  // equivalent is ORG_PENDING_VERIFICATION.
+  APPLICATION_PENDING_REVIEW = 'application_pending_review',
+  // An NGO submitted a funding programme — sent to the platform admins.
+  PROGRAM_PENDING_REVIEW = 'program_pending_review',
+  // The platform's decision on that programme — sent back to the NGO's staff.
+  PROGRAM_REVIEWED = 'program_reviewed',
 }
 
 export enum AuditAction {
@@ -117,6 +183,10 @@ export enum AuditAction {
   REVOKE_CONSENT = 'revoke_consent',
   ADMIN_APPROVE = 'admin_approve',
   ADMIN_REJECT = 'admin_reject',
+  APPLICATION_SUBMITTED = 'application_submitted',
+  // An NGO edited its own programme. Until now edits left no trace at all, so an
+  // approved programme could be re-scoped with nothing to show for it.
+  PROGRAM_UPDATED = 'program_updated',
   LOGIN = 'login',
   CONSENT_CHANGE = 'consent_change',
   CROSS_ORG_ATTEMPT = 'cross_org_attempt',
@@ -169,4 +239,24 @@ export enum AppointmentStatus {
 export enum AppointmentConfirmationAction {
   CREATED = 'created',
   RESCHEDULED = 'rescheduled',
+}
+
+/**
+ * The four roles whose accounts are gated behind admin approval, as the applicant
+ * sees themselves. Deliberately not UserRole: this keys the application-email copy
+ * table, and a Record<UserRole, ...> would force meaningless entries for patient,
+ * researcher and platform_admin.
+ */
+export enum ApplicantRole {
+  NGO = 'ngo',
+  HMO = 'hmo',
+  PROFESSIONAL = 'professional',
+  BENEFACTOR = 'benefactor',
+}
+
+/** The three points in an application's life at which we email the applicant. */
+export enum ApplicationEmailEvent {
+  RECEIVED = 'received',
+  APPROVED = 'approved',
+  REJECTED = 'rejected',
 }

@@ -5,7 +5,7 @@ import { Repository } from 'typeorm';
 import { Queue } from 'bullmq';
 
 import { AppointmentConfirmationAction, AppointmentStatus } from 'src/common/enums';
-import { MAIL_QUEUE, SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
+import { MAIL_JOB_OPTIONS, MAIL_QUEUE, SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
 import { SendAppointmentConfirmationJob } from 'src/queues/interfaces/send-appointment-confirmation-job.interface';
 import { PatientsService } from 'src/modules/patients/patients.service';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
@@ -186,7 +186,7 @@ export class AppointmentsService {
       facility: appointment.facility,
       action,
     };
-    await this.mailQueue.add(SEND_APPOINTMENT_CONFIRMATION_JOB, payload);
+    await this.mailQueue.add(SEND_APPOINTMENT_CONFIRMATION_JOB, payload, MAIL_JOB_OPTIONS);
   }
 
   private todayIso(): string {

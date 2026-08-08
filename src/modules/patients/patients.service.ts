@@ -17,7 +17,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Queue } from 'bullmq';
 
 import { AuditAction, ConsentPurpose, ConsentStatus, HmoLinkRequestStatus, NotificationType, UserRole } from 'src/common/enums';
-import { MAIL_QUEUE, SEND_PATIENT_CREDENTIALS_JOB } from 'src/queues/queues.constants';
+import { MAIL_JOB_OPTIONS, MAIL_QUEUE, SEND_PATIENT_CREDENTIALS_JOB } from 'src/queues/queues.constants';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
 import { ExportService } from 'src/modules/export/export.service';
@@ -99,6 +99,8 @@ export class PatientsService {
     if (dto.dateOfBirth !== undefined) updates.dateOfBirth = dto.dateOfBirth;
     if (dto.gender !== undefined) updates.gender = dto.gender;
     if (dto.address !== undefined) updates.address = dto.address;
+    if (dto.locationState !== undefined) updates.locationState = dto.locationState;
+    if (dto.locationLga !== undefined) updates.locationLga = dto.locationLga;
     if (dto.medicationList !== undefined) updates.medicationList = dto.medicationList as object[];
     if (dto.directContactShared !== undefined) updates.directContactShared = dto.directContactShared;
 
@@ -182,10 +184,11 @@ export class PatientsService {
       return patientRepo.save(newPatient);
     });
 
-    await this.mailQueue.add(SEND_PATIENT_CREDENTIALS_JOB, {
-      to: dto.email,
-      tempPassword,
-    });
+    await this.mailQueue.add(
+      SEND_PATIENT_CREDENTIALS_JOB,
+      { to: dto.email, tempPassword },
+      MAIL_JOB_OPTIONS,
+    );
 
     return patient;
   }

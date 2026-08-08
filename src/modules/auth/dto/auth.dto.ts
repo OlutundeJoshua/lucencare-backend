@@ -12,11 +12,13 @@ import {
   IsUrl,
   Equals,
   Length,
+  MaxLength,
   MinLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 import { ConsentPurpose, Gender, OrgType, UserRole } from 'src/common/enums';
+import { LOGIN_CLIENT_ROLES, SIGNUP_CLIENT_ROLES } from 'src/common/constants/client-roles';
 
 export class RegisterPatientDto {
   @ApiProperty() @IsEmail() email: string;
@@ -83,6 +85,15 @@ export class LoginDto {
   @ApiProperty() @IsEmail() email: string;
 
   @ApiProperty() @IsString() @IsNotEmpty() password: string;
+
+  // Part of the credential, not a hint: an account may only sign in from the
+  // portal matching its own role. See AuthService.login.
+  @ApiProperty({
+    enum: LOGIN_CLIENT_ROLES,
+    description: 'Portal the user is signing in from',
+  })
+  @IsIn(LOGIN_CLIENT_ROLES)
+  role: string;
 }
 
 export class RequestOtpDto {
@@ -111,8 +122,8 @@ export class SignupDto {
 
   @ApiProperty({ minLength: 8 }) @IsString() @MinLength(8) password: string;
 
-  @ApiProperty({ enum: ['patient', 'ngo', 'hmo', 'professional', 'benefactor'] })
-  @IsIn(['patient', 'ngo', 'hmo', 'professional', 'benefactor'])
+  @ApiProperty({ enum: SIGNUP_CLIENT_ROLES })
+  @IsIn(SIGNUP_CLIENT_ROLES)
   role: string;
 }
 
@@ -129,6 +140,23 @@ export class PatientOnboardingDto {
   biologicalSex?: string;
 
   @ApiPropertyOptional() @IsOptional() @IsString() country?: string;
+
+  /**
+   * Optional so the wizard can collect it only where it means something (the state
+   * list is Nigeria-shaped), and so an existing client that does not send it still
+   * completes onboarding. Editable afterwards via PATCH /patients/me.
+   */
+  @ApiPropertyOptional({ description: 'State or region, e.g. "Lagos"' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  locationState?: string;
+
+  @ApiPropertyOptional({ description: 'Local government area' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  locationLga?: string;
 
   @ApiPropertyOptional({ description: 'Comma-separated conditions e.g. "Diabetes, Hypertension"' })
   @IsOptional()
@@ -150,6 +178,16 @@ export class NgoOnboardingDto {
   @ApiProperty() @IsString() @IsNotEmpty() orgName: string;
 
   @ApiProperty() @IsString() @IsNotEmpty() registrationNumber: string;
+
+  @ApiProperty({ description: 'Tax Identification Number' })
+  @IsString()
+  @IsNotEmpty()
+  tin: string;
+
+  @ApiProperty({ description: 'SCUML certificate number' })
+  @IsString()
+  @IsNotEmpty()
+  scumlNumber: string;
 
   @ApiProperty() @IsString() @IsNotEmpty() focusAreas: string;
 

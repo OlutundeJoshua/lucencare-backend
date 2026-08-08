@@ -47,6 +47,9 @@ const mockProgram = {
   id: '01HZZZZZZZZZZZZZZZZZZZZZAD',
   title: 'Test Program',
   status: ProgramStatus.PENDING_REVIEW,
+  // The outcome notice is addressed by org: createdBy is null for anything created
+  // outside a CLS-bearing request, which left the old payload with no recipient.
+  orgId: '01HZZZZZZZZZZZZZZZZZZZZORG',
   createdBy: '01HZZZZZZZZZZZZZZZZZZZZZAE',
 };
 
@@ -305,27 +308,39 @@ describe('AdminService', () => {
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('approves program: calls updateStatus(APPROVED), indexProgram, writes ADMIN_APPROVE audit, enqueues PROGRAM_APPROVED_JOB', async () => {
+    it('approves program: records the reviewer, writes ADMIN_APPROVE audit, enqueues PROGRAM_APPROVED_JOB', async () => {
       programsService.findOne.mockResolvedValue(mockProgram as any);
       programsService.updateStatus.mockResolvedValue(undefined as any);
-      matchingService.indexProgram.mockResolvedValue(undefined as any);
       auditService.log.mockResolvedValue(undefined);
       adminQueue.add.mockResolvedValue(undefined);
 
       await service.reviewProgram(mockProgram.id, ADMIN_USER_ID, { status: 'approved' });
 
-      expect(programsService.updateStatus).toHaveBeenCalledWith(mockProgram.id, ProgramStatus.APPROVED);
-      expect(matchingService.indexProgram).toHaveBeenCalledWith(mockProgram.id);
+      // The decision is stored on the programme, not only in the audit row the NGO
+      // cannot read. indexProgram now happens inside updateStatus — calling it here
+      // as well indexed every approval twice.
+      expect(programsService.updateStatus).toHaveBeenCalledWith(
+        mockProgram.id,
+        ProgramStatus.APPROVED,
+        { reason: undefined, reviewedBy: ADMIN_USER_ID },
+      );
+      expect(matchingService.indexProgram).not.toHaveBeenCalled();
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: AuditAction.ADMIN_APPROVE, resourceId: mockProgram.id }),
       );
       expect(adminQueue.add).toHaveBeenCalledWith(
         PROGRAM_APPROVED_JOB,
-        expect.objectContaining({ programId: mockProgram.id, programTitle: mockProgram.title }),
+        expect.objectContaining({
+          programId: mockProgram.id,
+          programTitle: mockProgram.title,
+          // Recipients are resolved from the org: program.createdBy is null for
+          // anything created without a CLS user, which left the notice unaddressed.
+          orgId: mockProgram.orgId,
+        }),
       );
     });
 
-    it('rejects program: does NOT call indexProgram, writes ADMIN_REJECT audit, enqueues PROGRAM_REJECTED_JOB', async () => {
+    it('rejects program: stores the reason and enqueues PROGRAM_REJECTED_JOB', async () => {
       programsService.findOne.mockResolvedValue(mockProgram as any);
       programsService.updateStatus.mockResolvedValue(undefined as any);
       auditService.log.mockResolvedValue(undefined);
@@ -333,8 +348,11 @@ describe('AdminService', () => {
 
       await service.reviewProgram(mockProgram.id, ADMIN_USER_ID, { status: 'rejected', reason: 'Not eligible' });
 
-      expect(programsService.updateStatus).toHaveBeenCalledWith(mockProgram.id, ProgramStatus.REJECTED);
-      expect(matchingService.indexProgram).not.toHaveBeenCalled();
+      expect(programsService.updateStatus).toHaveBeenCalledWith(
+        mockProgram.id,
+        ProgramStatus.REJECTED,
+        { reason: 'Not eligible', reviewedBy: ADMIN_USER_ID },
+      );
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: AuditAction.ADMIN_REJECT }),
       );
@@ -343,6 +361,18 @@ describe('AdminService', () => {
         expect.objectContaining({ programId: mockProgram.id, reason: 'Not eligible' }),
       );
       expect(adminQueue.add).not.toHaveBeenCalledWith(PROGRAM_APPROVED_JOB, expect.anything());
+    });
+
+    // The review has committed by then; a 500 would send the admin back to a 409.
+    it('still succeeds when the outcome job cannot be enqueued', async () => {
+      programsService.findOne.mockResolvedValue(mockProgram as any);
+      programsService.updateStatus.mockResolvedValue(undefined as any);
+      auditService.log.mockResolvedValue(undefined);
+      adminQueue.add.mockRejectedValue(new Error('redis down'));
+
+      await expect(
+        service.reviewProgram(mockProgram.id, ADMIN_USER_ID, { status: 'approved' }),
+      ).resolves.toBeDefined();
     });
   });
 

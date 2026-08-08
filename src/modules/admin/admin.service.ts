@@ -31,6 +31,7 @@ import {
   STUDY_APPROVED_JOB,
   STUDY_REJECTED_JOB,
 } from 'src/queues/queues.constants';
+import { ProgramOutcomeJob } from 'src/queues/interfaces/program-outcome-job.interface';
 import { SendApplicationStatusJob } from 'src/queues/interfaces/send-application-status-job.interface';
 
 import { AdminApproveDto } from './dto/admin-approve.dto';
@@ -133,11 +134,13 @@ export class AdminService {
     }
 
     const newStatus = dto.status === 'approved' ? ProgramStatus.APPROVED : ProgramStatus.REJECTED;
-    await this.programsService.updateStatus(programId, newStatus);
-
-    if (dto.status === 'approved') {
-      await this.matchingService.indexProgram(programId);
-    }
+    // The decision is stored on the programme itself — the NGO cannot read the
+    // audit log, so a reason recorded only there could never reach the person who
+    // has to act on it.
+    await this.programsService.updateStatus(programId, newStatus, {
+      reason: dto.reason,
+      reviewedBy: adminUserId,
+    });
 
     const auditAction = dto.status === 'approved' ? AuditAction.ADMIN_APPROVE : AuditAction.ADMIN_REJECT;
     await this.auditService.log({
@@ -148,18 +151,25 @@ export class AdminService {
       metadata: dto.reason ? { reason: dto.reason } : undefined,
     });
 
-    if (dto.status === 'approved') {
-      await this.adminQueue.add(PROGRAM_APPROVED_JOB, {
-        programId: program.id,
-        orgAdminUserId: program.createdBy,
-        programTitle: program.title,
-      });
-    } else {
-      await this.adminQueue.add(PROGRAM_REJECTED_JOB, {
-        programId: program.id,
-        orgAdminUserId: program.createdBy,
-        reason: dto.reason,
-      });
+    // Outcome jobs are routed by AdminQueueProcessor. They were enqueued here and
+    // handled only on NOTIFICATIONS_QUEUE, so every one was silently discarded.
+    const outcome: ProgramOutcomeJob = {
+      programId: program.id,
+      orgId: program.orgId,
+      programTitle: program.title,
+      reason: dto.reason,
+    };
+    try {
+      await this.adminQueue.add(
+        dto.status === 'approved' ? PROGRAM_APPROVED_JOB : PROGRAM_REJECTED_JOB,
+        outcome,
+      );
+    } catch (err) {
+      // Same reasoning as enqueueOutcomeEmail: the review has committed, and a
+      // retry would 409 on a programme that is no longer pending.
+      this.logger.error(
+        `Failed to enqueue ${dto.status} notice for program ${programId}: ${(err as Error).message}`,
+      );
     }
 
     return (await this.programsService.findOne(programId)) as unknown as Program;

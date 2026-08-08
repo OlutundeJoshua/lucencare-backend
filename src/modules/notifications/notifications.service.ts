@@ -173,6 +173,29 @@ export class NotificationsService {
           body: `${s('applicantName', 'An applicant')} is awaiting review.`,
         };
 
+      case NotificationType.PROGRAM_PENDING_REVIEW:
+        return {
+          title: 'Programme awaiting review',
+          body: `${s('programTitle', 'A funding programme')} has been submitted and needs approving before patients can see it.`,
+        };
+
+      case NotificationType.PROGRAM_REVIEWED: {
+        const programTitle = s('programTitle', 'Your programme');
+        const reason = s('reason');
+        if (p['approved'] === true) {
+          return {
+            title: 'Programme approved',
+            body: `${programTitle} is now live. Patients who match your criteria can see it and apply.`,
+          };
+        }
+        return {
+          title: 'Programme not approved',
+          body: reason
+            ? `${programTitle} was not approved. Reason: ${reason}`
+            : `${programTitle} was not approved. Edit it and submit again when you are ready.`,
+        };
+      }
+
       case NotificationType.ORG_PENDING_VERIFICATION:
         return {
           title: 'Organisation awaiting verification',
@@ -242,6 +265,8 @@ export class NotificationsService {
 
       case NotificationType.PROGRAM_MATCH:
       case NotificationType.STUDY_MATCH:
+      case NotificationType.PROGRAM_PENDING_REVIEW:
+      case NotificationType.PROGRAM_REVIEWED:
         return 'program';
 
       case NotificationType.MEDICATION_REMINDER:

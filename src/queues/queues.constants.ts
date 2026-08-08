@@ -1,5 +1,3 @@
-// TODO: Implement — see docs/modules/queues.md
-
 export const NOTIFICATIONS_QUEUE = 'notifications';
 export const ADMIN_QUEUE = 'admin';
 export const MAIL_QUEUE = 'mail';
@@ -31,6 +29,9 @@ export const SEND_APPLICATION_STATUS_JOB = 'send_application_status';
 // Tells a patient the outcome of a programme application. Distinct from
 // SEND_APPLICATION_STATUS_JOB, which is about an *account* being approved.
 export const SEND_ENROLLMENT_OUTCOME_JOB = 'send_enrollment_outcome';
+// Tells an NGO whether the platform approved the programme it submitted. The third
+// distinct outcome email: account (application), applicant (enrollment), programme.
+export const SEND_PROGRAM_STATUS_JOB = 'send_program_status';
 
 export const NOTIFICATION_FAN_OUT_BATCH_SIZE = 200;
 export const MEDICATION_REFILL_CHECK_CRON = '0 7 * * *';

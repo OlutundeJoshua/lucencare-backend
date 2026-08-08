@@ -1,13 +1,22 @@
 /**
- * The operational state of an approved programme, as NGO staff think about it.
+ * The single label an NGO sees on a programme card.
  *
- * Distinct from ProgramStatus, which is the platform's review state
- * (pending_review / approved / rejected / expired). A programme can be `approved`
- * and simultaneously `Full` or `Paused`; collapsing the two axes into one column
- * would make those states mutually exclusive.
+ * Before approval it reports the review state one-for-one — `Draft`, `In review`,
+ * `Not approved`. After approval it reports the operational state, which is a
+ * second axis entirely: an approved programme can be `Full` or `Paused` at the
+ * same time, so the two could never share one stored column.
  *
- * Only `Paused` is stored (as programs.paused_at). The rest are derived at read
- * time, so they cannot drift out of step with the slot counts and expiry they
- * describe.
+ * Every value except `Paused` (stored as programs.paused_at) is derived at read
+ * time, so a label cannot drift out of step with the status, slot counts and
+ * expiry it describes. `Draft` used to cover pending_review AND rejected, which
+ * is exactly the drift this split removes.
  */
-export type ProgramLifecycle = 'Draft' | 'Active' | 'Closing' | 'Full' | 'Paused' | 'Expired';
+export type ProgramLifecycle =
+  | 'Draft'
+  | 'In review'
+  | 'Not approved'
+  | 'Active'
+  | 'Closing'
+  | 'Full'
+  | 'Paused'
+  | 'Expired';

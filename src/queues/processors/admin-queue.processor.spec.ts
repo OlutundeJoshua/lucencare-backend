@@ -5,6 +5,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import {
   APPLICATION_REVIEW_JOB,
   ORG_VERIFICATION_JOB,
+  PROGRAM_APPROVED_JOB,
+  PROGRAM_REJECTED_JOB,
   PROGRAM_REVIEW_JOB,
   STUDY_REVIEW_JOB,
 } from 'src/queues/queues.constants';
@@ -12,6 +14,7 @@ import {
 import { AdminQueueProcessor } from './admin-queue.processor';
 import { ApplicationReviewProcessor } from './application-review.processor';
 import { OrgVerificationProcessor } from './org-verification.processor';
+import { ProgramOutcomeProcessor } from './program-outcome.processor';
 import { ProgramReviewProcessor } from './program-review.processor';
 import { StudyReviewProcessor } from './study-review.processor';
 
@@ -20,12 +23,14 @@ describe('AdminQueueProcessor', () => {
   let orgVerificationProcessor: { process: jest.Mock };
   let studyReviewProcessor: { process: jest.Mock };
   let programReviewProcessor: { process: jest.Mock };
+  let programOutcomeProcessor: { process: jest.Mock };
   let applicationReviewProcessor: { process: jest.Mock };
 
   beforeEach(async () => {
     orgVerificationProcessor = { process: jest.fn() };
     studyReviewProcessor = { process: jest.fn() };
     programReviewProcessor = { process: jest.fn() };
+    programOutcomeProcessor = { process: jest.fn() };
     applicationReviewProcessor = { process: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -34,6 +39,7 @@ describe('AdminQueueProcessor', () => {
         { provide: OrgVerificationProcessor, useValue: orgVerificationProcessor },
         { provide: StudyReviewProcessor, useValue: studyReviewProcessor },
         { provide: ProgramReviewProcessor, useValue: programReviewProcessor },
+        { provide: ProgramOutcomeProcessor, useValue: programOutcomeProcessor },
         { provide: ApplicationReviewProcessor, useValue: applicationReviewProcessor },
       ],
     }).compile();
@@ -59,6 +65,20 @@ describe('AdminQueueProcessor', () => {
     const job = { name: STUDY_REVIEW_JOB, data: {} } as Job;
     await processor.process(job);
     expect(studyReviewProcessor.process).toHaveBeenCalledWith(job);
+  });
+
+  // Both outcome jobs are produced onto THIS queue; they used to be routed only on
+  // NOTIFICATIONS_QUEUE, so every approval and rejection notice was discarded.
+  it('routes program_approved jobs to ProgramOutcomeProcessor', async () => {
+    const job = { name: PROGRAM_APPROVED_JOB, data: {} } as Job;
+    await processor.process(job);
+    expect(programOutcomeProcessor.process).toHaveBeenCalledWith(job);
+  });
+
+  it('routes program_rejected jobs to ProgramOutcomeProcessor', async () => {
+    const job = { name: PROGRAM_REJECTED_JOB, data: {} } as Job;
+    await processor.process(job);
+    expect(programOutcomeProcessor.process).toHaveBeenCalledWith(job);
   });
 
   it('routes program_review jobs to ProgramReviewProcessor', async () => {

@@ -1,11 +1,10 @@
-// TODO: Implement — see docs/modules/queues.md
-
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 
 import { User } from 'src/modules/auth/entities/user.entity';
+import { Organization } from 'src/modules/organizations/entities/organization.entity';
 
 import {
   NOTIFICATIONS_QUEUE,
@@ -21,7 +20,7 @@ import { ProgramReviewProcessor } from './processors/program-review.processor';
 import { StudyReviewProcessor } from './processors/study-review.processor';
 import { ApplicationReviewProcessor } from './processors/application-review.processor';
 import { OrgVerificationProcessor } from './processors/org-verification.processor';
-import { ProgramApprovedProcessor } from './processors/program-approved.processor';
+import { ProgramOutcomeProcessor } from './processors/program-outcome.processor';
 import { StudyApprovedProcessor } from './processors/study-approved.processor';
 import { SendOtpProcessor } from './processors/send-otp.processor';
 import { SendResetPasswordProcessor } from './processors/send-reset-password.processor';
@@ -33,6 +32,7 @@ import { SendAppointmentConfirmationProcessor } from './processors/send-appointm
 import { SendPatientOnboardingWelcomeProcessor } from './processors/send-patient-onboarding-welcome.processor';
 import { SendApplicationStatusProcessor } from './processors/send-application-status.processor';
 import { SendEnrollmentOutcomeProcessor } from './processors/send-enrollment-outcome.processor';
+import { SendProgramStatusProcessor } from './processors/send-program-status.processor';
 import { MailQueueProcessor } from './processors/mail-queue.processor';
 import { NotificationsQueueProcessor } from './processors/notifications-queue.processor';
 import { AdminQueueProcessor } from './processors/admin-queue.processor';
@@ -60,8 +60,9 @@ import { MailModule } from 'src/modules/mail/mail.module';
       { name: ADMIN_QUEUE, defaultJobOptions: QUEUE_DEFAULT_JOB_OPTIONS },
       { name: MAIL_QUEUE, defaultJobOptions: QUEUE_DEFAULT_JOB_OPTIONS },
     ),
-    // OrgVerificationProcessor resolves the platform-admin recipient list.
-    TypeOrmModule.forFeature([User]),
+    // OrgVerificationProcessor and ProgramReviewProcessor resolve the platform-admin
+    // recipient list; ProgramOutcomeProcessor resolves the NGO's staff and org name.
+    TypeOrmModule.forFeature([User, Organization]),
     MedicationsModule,
     NotificationsModule,
     MailModule,
@@ -73,7 +74,7 @@ import { MailModule } from 'src/modules/mail/mail.module';
     ProgramReviewProcessor,
     StudyReviewProcessor,
     OrgVerificationProcessor,
-    ProgramApprovedProcessor,
+    ProgramOutcomeProcessor,
     StudyApprovedProcessor,
     SendOtpProcessor,
     SendResetPasswordProcessor,
@@ -85,6 +86,7 @@ import { MailModule } from 'src/modules/mail/mail.module';
     SendPatientOnboardingWelcomeProcessor,
     SendApplicationStatusProcessor,
     SendEnrollmentOutcomeProcessor,
+    SendProgramStatusProcessor,
     ApplicationReviewProcessor,
     MailQueueProcessor,
     NotificationsQueueProcessor,

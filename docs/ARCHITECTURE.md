@@ -151,6 +151,7 @@ src/
 │   ├── messages/
 │   ├── export/
 │   ├── audit/
+│   ├── community/                      # Communities, posts, comments, reactions, moderation
 │   ├── admin/
 │   └── applications/
 ├── queues/
@@ -467,6 +468,74 @@ interface BenefactorApplication extends BaseEntity {
 
 Migration: `1751380003000-CreateBenefactorApplicationTable`
 
+### 3.16 `communities`, `community_memberships`, `community_posts`, `community_comments`, `community_reactions`, `community_reports`
+
+**Purpose:** The peer-support space. Six tables, all created by `1785600000000-CreateCommunityTables`.
+
+```typescript
+interface Community extends BaseEntity {
+  name: string; slug: string;              // slug UNIQUE among non-deleted rows
+  description?: string; icon?: string; accent?: string;
+  disclaimer?: string;                     // shown before a member's first post
+  tags: string[];                          // GIN indexed
+  status: CommunityStatus;                 // default 'active'
+  memberCount: number; postCount: number;  // DISPLAY ONLY — never read by getStats()
+  createdByUserId: string;
+}
+
+interface CommunityMembership extends BaseEntity {
+  communityId: string; userId: string;     // userId is a JWT sub, NOT a patientId
+  joinedAt: Date; codeOfConductAt?: Date;
+}
+// Leaving is a SOFT delete, so uniqueness is PARTIAL:
+//   UNIQUE (community_id, user_id) WHERE deleted_at IS NULL
+// A plain unique index would make rejoining after leaving impossible.
+
+interface CommunityPost extends BaseEntity {
+  communityId: string; authorUserId: string;
+  title?: string; body: string; tags: string[];
+  status: CommunityContentStatus;          // 'published' | 'hidden'
+  hiddenAt?: Date; hiddenBy?: string; hiddenReason?: string;
+  commentCount: number; reactionCount: number; lastActivityAt: Date;
+}
+
+interface CommunityComment extends BaseEntity {
+  postId: string;
+  parentCommentId?: string;                // one level only; deeper replies re-parent
+  communityId: string;                     // denormalised from the post
+  authorUserId: string; body: string;
+  status: CommunityContentStatus;
+  hiddenAt?: Date; hiddenBy?: string; hiddenReason?: string;
+  reactionCount: number;
+}
+
+interface CommunityReaction extends BaseEntity {
+  userId: string;
+  postId?: string; commentId?: string;      // CHECK num_nonnulls(...) = 1
+  targetAuthorUserId: string;               // denormalised — backs "Helpful marks"
+  type: CommunityReactionType;
+}
+// TWO partial unique indexes, not one composite: Postgres treats NULLs as distinct,
+// so a UNIQUE over both nullable columns would constrain nothing.
+//   UNIQUE (user_id, post_id, type)    WHERE post_id    IS NOT NULL
+//   UNIQUE (user_id, comment_id, type) WHERE comment_id IS NOT NULL
+// Un-reacting is a HARD delete — a soft-deleted row still occupies the index.
+
+interface CommunityReport extends BaseEntity {
+  reporterUserId: string;
+  postId?: string; commentId?: string;      // CHECK num_nonnulls(...) = 1
+  communityId: string;
+  reason: CommunityReportReason; details?: string;
+  status: CommunityReportStatus;            // CHECK status='pending' OR reviewed_at IS NOT NULL
+  resolutionNote?: string; reviewedAt?: Date; reviewedBy?: string;
+}
+// One OPEN report per reporter per target, also a partial unique index.
+```
+
+**No RLS.** §6.5 of CLAUDE.md scopes RLS to org- and patient-scoped tables. Community content is participant-public by design; the boundary that matters — no `ngo_admin`, `hmo_coordinator` or `researcher` — is the controller's class-level `RoleGuard`.
+
+Migration: `1785600000000-CreateCommunityTables`
+
 ---
 
 ## 4. Enums
@@ -588,6 +657,11 @@ Migration: `1751380003000-CreateBenefactorApplicationTable`
 | `new_message` | Message received in enrollment thread |
 | `study_match` | New approved study matches patient profile |
 | `org_verified` | Admin approved the org |
+| `community_post_reply` | Someone commented on, or replied under, your post |
+| `community_reaction_milestone` | Your content crossed 1 / 5 / 25 / 100 helpful marks. Never per-like |
+| `community_content_hidden` | A moderator removed your post or comment, and why |
+| `community_report_resolved` | The report you filed has been reviewed — sent to the reporter |
+| `community_content_reported` | Content was reported — sent to platform admins |
 
 ### `AuditAction`
 
@@ -600,6 +674,27 @@ Migration: `1751380003000-CreateBenefactorApplicationTable`
 | `login` | Successful authentication |
 | `consent_change` | Any consent status change |
 | `cross_org_attempt` | Request blocked for accessing another org's data |
+| `community_created` | A patient founded a community, or an admin edited one |
+| `community_content_hidden` | A moderator removed a post or comment |
+| `community_content_restored` | A moderator restored previously removed content |
+| `community_report_submitted` | A member reported content |
+| `community_report_resolved` | A moderator hid or dismissed a report |
+
+Community rows are deliberately **absent** from `NAMED_AUDIT_RESOURCE_TYPES`: that allowlist resolves a resourceId to a human label, and for a community post that would put patient free-text health disclosures onto the admin audit screen.
+
+### `CommunityStatus`, `CommunityContentStatus`, `CommunityReactionType`, `CommunityReportTarget`, `CommunityReportReason`, `CommunityReportStatus`, `CommunityModerationAction`
+
+| Enum | Values |
+|---|---|
+| `CommunityStatus` | `active`, `archived` |
+| `CommunityContentStatus` | `published`, `hidden` — shared by posts and comments, which moderate identically |
+| `CommunityReactionType` | `like` — one member, so "helpful"/"supportive" need no migration later |
+| `CommunityReportTarget` | `post`, `comment` |
+| `CommunityReportReason` | `spam`, `harassment`, `misinformation`, `medical_advice`, `personal_data`, `other` |
+| `CommunityReportStatus` | `pending`, `actioned`, `dismissed` |
+| `CommunityModerationAction` | `hide`, `dismiss` — an intent the DTO validates, kept distinct from the stored status |
+
+`COMMUNITY_PARTICIPANT_ROLES` (`as const`) is `[patient, professional, benefactor]`. `ngo_admin`, `hmo_coordinator` and `researcher` are deliberately absent.
 
 ### `TokenPurpose`
 
@@ -751,8 +846,11 @@ Write-only `AuditService.log()`. `audit_log` is INSERT-only.
 ### `AdminModule`
 Admin review for orgs, programs, studies, and professional/benefactor applications.
 
+### `CommunityModule`
+Communities, memberships, posts, comments, reactions and the report → moderation pipeline. Two controllers in one file: `CommunityController` (`patient` / `professional` / `benefactor`) and `CommunityModerationController` under `/admin/community` (`platform_admin`). Owns `GET /community/stats`, the only source for the community numbers on the professional and benefactor dashboards. Author display names and verified badges are derived at read time by `resolveAuthors()` and never snapshotted. See `docs/specs/community.spec.md`.
+
 ### `QueuesModule`
-Three queues (`notifications`, `admin`, `mail`), nine processors filtering on `job.name`.
+Three queues (`notifications`, `admin`, `mail`), ten processors filtering on `job.name`.
 
 ---
 
@@ -870,6 +968,43 @@ All routes prefixed with `/api`. All responses wrapped in `StandardResponse<T>`.
 | PATCH | /admin/applications/professional/:id/review | `platform_admin` | Approve or reject professional |
 | GET | /admin/applications/benefactor | `platform_admin` | List benefactor applications (filter by status) |
 | PATCH | /admin/applications/benefactor/:id/review | `platform_admin` | Approve or reject benefactor |
+
+### 7.13 Community
+
+`patient`, `professional` and `benefactor` only — every other role is refused at the class-level guard.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | /community/overview | participant | Platform-wide counters for the portal header |
+| GET | /community/trending | participant | Top tags on posts from the last 7 days |
+| GET | /community/stats | participant | The caller's own community numbers |
+| GET | /community/communities | participant | Browse active communities (`?tag`, `?joinedOnly`) |
+| POST | /community/communities | `patient` | Found a community; the founder is auto-joined |
+| GET | /community/communities/:id | participant | One community |
+| POST | /community/communities/:id/join | participant | Join (idempotent) |
+| DELETE | /community/communities/:id/join | participant | Leave; your posts stay |
+| POST | /community/communities/:id/posts | participant | Post — 403 without an active membership |
+| GET | /community/posts | participant | The feed (`?communityId`, `?tag`, `?joinedOnly`) |
+| GET | /community/posts/mine | participant | Your own posts, hidden ones included |
+| GET | /community/posts/unanswered | participant | Posts with no replies yet |
+| GET | /community/posts/:id | participant | One post — 404, not 403, if hidden and not yours |
+| PATCH | /community/posts/:id | author | 409 once a moderator has hidden it |
+| DELETE | /community/posts/:id | author | Soft delete |
+| GET | /community/posts/:id/comments | participant | The thread, oldest first |
+| POST | /community/posts/:id/comments | participant | Comment, or reply via `parentCommentId` |
+| PATCH \| DELETE | /community/comments/:id | author | Edit / delete your own |
+| POST \| DELETE | /community/{posts,comments}/:id/reactions | participant | Mark helpful — 409 on your own |
+| POST | /community/{posts,comments}/:id/reports | participant | Report — 409 on a duplicate |
+
+**Moderation** — `platform_admin` only:
+
+| Method | Path | Description |
+|---|---|---|
+| GET | /admin/community/reports | The queue, newest first (`?status`) |
+| PATCH | /admin/community/reports/:id | `hide` (note required) or `dismiss` |
+| PATCH | /admin/community/posts/:id/visibility | Direct hide / restore |
+| PATCH | /admin/community/comments/:id/visibility | Direct hide / restore |
+| PATCH | /admin/community/communities/:id | Edit or archive a community |
 
 ### 7.12 Health
 

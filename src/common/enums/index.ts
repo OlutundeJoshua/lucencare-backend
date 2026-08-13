@@ -153,6 +153,71 @@ export enum HmoLinkRequestStatus {
   REJECTED = 'rejected',
 }
 
+export enum CommunityStatus {
+  ACTIVE = 'active',
+  /** Hidden from browse. Existing posts stay readable to members; nobody can post. */
+  ARCHIVED = 'archived',
+}
+
+/**
+ * Shared by posts and comments — the two are moderated identically, so a second
+ * enum would only be a copy that could drift.
+ */
+export enum CommunityContentStatus {
+  PUBLISHED = 'published',
+  HIDDEN = 'hidden',
+}
+
+/** One member today. The column exists so "helpful"/"supportive" need no migration. */
+export enum CommunityReactionType {
+  LIKE = 'like',
+}
+
+export enum CommunityReportTarget {
+  POST = 'post',
+  COMMENT = 'comment',
+}
+
+export enum CommunityReportReason {
+  SPAM = 'spam',
+  HARASSMENT = 'harassment',
+  MISINFORMATION = 'misinformation',
+  /** A professional gave individualised clinical advice in a public thread. */
+  MEDICAL_ADVICE = 'medical_advice',
+  /** Someone posted identifying or contact details — theirs or another patient's. */
+  PERSONAL_DATA = 'personal_data',
+  OTHER = 'other',
+}
+
+export enum CommunityReportStatus {
+  PENDING = 'pending',
+  /** The moderator agreed and hid the content. */
+  ACTIONED = 'actioned',
+  DISMISSED = 'dismissed',
+}
+
+/**
+ * What an admin may DO to a report. Kept distinct from CommunityReportStatus so the
+ * DTO validates an intent rather than letting a client name a stored state directly.
+ */
+export enum CommunityModerationAction {
+  HIDE = 'hide',
+  DISMISS = 'dismiss',
+}
+
+/**
+ * The three roles with access to the community. ngo_admin, hmo_coordinator and
+ * researcher are deliberately absent: the community is a patient-support space, and
+ * an organisation reading it would be reading health disclosures no ConsentGrant
+ * ever covered.
+ */
+export const COMMUNITY_PARTICIPANT_ROLES = [
+  UserRole.PATIENT,
+  UserRole.PROFESSIONAL,
+  UserRole.BENEFACTOR,
+] as const;
+export type CommunityParticipantRole = (typeof COMMUNITY_PARTICIPANT_ROLES)[number];
+
 export enum NotificationType {
   PROGRAM_MATCH = 'program_match',
   // A patient applied to an NGO's programme — sent to that NGO's staff. Distinct
@@ -176,6 +241,18 @@ export enum NotificationType {
   PROGRAM_PENDING_REVIEW = 'program_pending_review',
   // The platform's decision on that programme — sent back to the NGO's staff.
   PROGRAM_REVIEWED = 'program_reviewed',
+  // Someone commented on, or replied under, a post you wrote.
+  COMMUNITY_POST_REPLY = 'community_post_reply',
+  // Your post or comment crossed a helpful-marks milestone. Never fired per-like:
+  // like volume is unbounded, and one row per like would bury the whole feed.
+  COMMUNITY_REACTION_MILESTONE = 'community_reaction_milestone',
+  // A platform admin hid your post or comment. The author is always told, and why —
+  // silent removal generates support load and teaches nobody anything.
+  COMMUNITY_CONTENT_HIDDEN = 'community_content_hidden',
+  // The report you filed has been reviewed — sent to the reporter, not the author.
+  COMMUNITY_REPORT_RESOLVED = 'community_report_resolved',
+  // Content was reported and is waiting in the moderation queue — sent to admins.
+  COMMUNITY_CONTENT_REPORTED = 'community_content_reported',
 }
 
 export enum AuditAction {
@@ -191,6 +268,15 @@ export enum AuditAction {
   CONSENT_CHANGE = 'consent_change',
   CROSS_ORG_ATTEMPT = 'cross_org_attempt',
   MEDICATION_REFILL_REQUESTED = 'medication_refill_requested',
+  // Community moderation. Post vs comment is carried by the audit row's
+  // resourceType ('community_post' / 'community_comment'), not by separate actions —
+  // reusing ADMIN_APPROVE/ADMIN_REJECT would leave "admin_reject on community_post"
+  // ambiguous between "hid the post" and "dismissed a report about it".
+  COMMUNITY_CREATED = 'community_created',
+  COMMUNITY_CONTENT_HIDDEN = 'community_content_hidden',
+  COMMUNITY_CONTENT_RESTORED = 'community_content_restored',
+  COMMUNITY_REPORT_SUBMITTED = 'community_report_submitted',
+  COMMUNITY_REPORT_RESOLVED = 'community_report_resolved',
 }
 
 export enum DoseStatus {

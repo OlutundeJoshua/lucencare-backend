@@ -19,6 +19,7 @@ import { ConsentRevokedProcessor } from './processors/consent-revoked.processor'
 import { ProgramReviewProcessor } from './processors/program-review.processor';
 import { StudyReviewProcessor } from './processors/study-review.processor';
 import { ApplicationReviewProcessor } from './processors/application-review.processor';
+import { CommunityReportProcessor } from './processors/community-report.processor';
 import { OrgVerificationProcessor } from './processors/org-verification.processor';
 import { ProgramOutcomeProcessor } from './processors/program-outcome.processor';
 import { StudyApprovedProcessor } from './processors/study-approved.processor';
@@ -88,6 +89,7 @@ import { MailModule } from 'src/modules/mail/mail.module';
     SendEnrollmentOutcomeProcessor,
     SendProgramStatusProcessor,
     ApplicationReviewProcessor,
+    CommunityReportProcessor,
     MailQueueProcessor,
     NotificationsQueueProcessor,
     AdminQueueProcessor,

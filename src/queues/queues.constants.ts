@@ -32,6 +32,10 @@ export const SEND_ENROLLMENT_OUTCOME_JOB = 'send_enrollment_outcome';
 // Tells an NGO whether the platform approved the programme it submitted. The third
 // distinct outcome email: account (application), applicant (enrollment), programme.
 export const SEND_PROGRAM_STATUS_JOB = 'send_program_status';
+// A community post or comment was reported — tells the platform admins. The
+// community-shaped equivalent of PROGRAM_REVIEW_JOB. Enqueued on ADMIN_QUEUE, so
+// its switch arm belongs in AdminQueueProcessor and nowhere else.
+export const COMMUNITY_REPORT_JOB = 'community_report';
 
 export const NOTIFICATION_FAN_OUT_BATCH_SIZE = 200;
 export const MEDICATION_REFILL_CHECK_CRON = '0 7 * * *';

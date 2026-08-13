@@ -25,6 +25,7 @@ import { ProgramsModule } from './modules/programs/programs.module';
 import { StudiesModule } from './modules/studies/studies.module';
 import { EnrollmentsModule } from './modules/enrollments/enrollments.module';
 import { MatchingModule } from './modules/matching/matching.module';
+import { CommunityModule } from './modules/community/community.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { MessagesModule } from './modules/messages/messages.module';
 import { ExportModule } from './modules/export/export.module';
@@ -106,6 +107,7 @@ import { HealthModule } from './health/health.module';
     StudiesModule,
     EnrollmentsModule,
     MatchingModule,
+    CommunityModule,
     NotificationsModule,
     MessagesModule,
     ExportModule,

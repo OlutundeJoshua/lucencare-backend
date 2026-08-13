@@ -7,6 +7,14 @@ node_modules/
 dist/
 build/
 
+# Throwaway scripts run through ts-node from the repo root (one-off migration or
+# data checks). ts-node emits .js/.d.ts/.js.map siblings, and deleting only the .ts
+# leaves those behind — where nothing else in this file would have caught them.
+*.tmp.ts
+*.tmp.js
+*.tmp.d.ts
+*.tmp.js.map
+
 # Environment files — never commit real values
 .env
 .env.local

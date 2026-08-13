@@ -470,6 +470,212 @@ describe('CommunityService', () => {
         ConflictException,
       );
     });
+
+    // The person you replied to is not usually the person who wrote the post. Before
+    // this, only the post author heard about a reply.
+    it('notifies the comment author you replied to, as well as the post author', async () => {
+      const third = '01J0000000000000000000THRD';
+      stubAuthors([patientAuthorRow(), patientAuthorRow(OTHER_ID, 'Emeka Obi')]);
+      commentRepo.findOne.mockResolvedValue(makeComment({ authorUserId: third }));
+
+      await service.createComment(OTHER_ID, POST_ID, {
+        body: 'Same here',
+        parentCommentId: COMMENT_ID,
+      });
+
+      expect(notificationsService.createOne).toHaveBeenCalledWith(
+        AUTHOR_ID,
+        NotificationType.COMMUNITY_POST_REPLY,
+        expect.objectContaining({ postId: POST_ID }),
+      );
+      expect(notificationsService.createOne).toHaveBeenCalledWith(
+        third,
+        NotificationType.COMMUNITY_COMMENT_REPLY,
+        expect.objectContaining({ parentCommentId: COMMENT_ID }),
+      );
+    });
+
+    // Otherwise replying to the post author's own comment buzzes them twice for one act.
+    it('notifies once when the comment author is also the post author', async () => {
+      commentRepo.findOne.mockResolvedValue(makeComment({ authorUserId: AUTHOR_ID }));
+
+      await service.createComment(OTHER_ID, POST_ID, {
+        body: 'Thanks',
+        parentCommentId: COMMENT_ID,
+      });
+
+      expect(notificationsService.createOne).toHaveBeenCalledTimes(1);
+      expect(notificationsService.createOne).toHaveBeenCalledWith(
+        AUTHOR_ID,
+        NotificationType.COMMUNITY_POST_REPLY,
+        expect.anything(),
+      );
+    });
+
+    it('does not notify you for replying to yourself', async () => {
+      commentRepo.findOne.mockResolvedValue(makeComment({ authorUserId: AUTHOR_ID }));
+
+      await service.createComment(AUTHOR_ID, POST_ID, {
+        body: 'Adding to this',
+        parentCommentId: COMMENT_ID,
+      });
+
+      expect(notificationsService.createOne).not.toHaveBeenCalled();
+    });
+
+    // The notification follows the comment you clicked, not the row's storage parent.
+    it('notifies the reply author when you reply to a reply', async () => {
+      const replyAuthor = '01J0000000000000000000RPLY';
+      commentRepo.findOne.mockResolvedValue(
+        makeComment({ id: 'REPLY', parentCommentId: COMMENT_ID, authorUserId: replyAuthor }),
+      );
+
+      await service.createComment(OTHER_ID, POST_ID, {
+        body: 'Agreed',
+        parentCommentId: 'REPLY',
+      });
+
+      expect(notificationsService.createOne).toHaveBeenCalledWith(
+        replyAuthor,
+        NotificationType.COMMUNITY_COMMENT_REPLY,
+        expect.anything(),
+      );
+    });
+  });
+
+  // ── Thread shape ─────────────────────────────────────────────────────────
+  describe('listComments / listReplies', () => {
+    beforeEach(() => {
+      stubAuthors([patientAuthorRow(), patientAuthorRow(OTHER_ID, 'Emeka Obi')]);
+      postRepo.findOne.mockResolvedValue(makePost());
+      communityRepo.find.mockResolvedValue([makeCommunity()]);
+    });
+
+    function stubComments(rows: unknown[]) {
+      const qb = makeQb();
+      qb.getMany.mockResolvedValue(rows);
+      commentRepo.createQueryBuilder.mockReturnValue(qb);
+      return qb;
+    }
+
+    it('asks only for top-level rows', async () => {
+      const qb = stubComments([makeComment()]);
+      await service.listComments(AUTHOR_ID, POST_ID, Object.assign(new PaginationDto(), { limit: 20 }));
+
+      const clauses = qb.andWhere.mock.calls.map((c) => String(c[0]));
+      expect(clauses.some((c) => c.includes('parent_comment_id IS NULL'))).toBe(true);
+    });
+
+    it('attaches a live reply count to each top-level comment', async () => {
+      stubComments([makeComment({ id: 'C1' })]);
+      commentRepo.manager.query.mockResolvedValue([{ id: 'C1', count: 3 }]);
+
+      const { comments } = await service.listComments(
+        AUTHOR_ID,
+        POST_ID,
+        Object.assign(new PaginationDto(), { limit: 20 }),
+      );
+      expect(comments[0].replyCount).toBe(3);
+    });
+
+    it('reports zero replies rather than omitting the field', async () => {
+      stubComments([makeComment({ id: 'C1' })]);
+      commentRepo.manager.query.mockResolvedValue([]);
+
+      const { comments } = await service.listComments(
+        AUTHOR_ID,
+        POST_ID,
+        Object.assign(new PaginationDto(), { limit: 20 }),
+      );
+      expect(comments[0].replyCount).toBe(0);
+    });
+
+    // BR-18. BR-11 keeps the replies published, so the parent has to survive as a
+    // tombstone or they become unreachable.
+    it('returns a hidden parent as a tombstone with no body and no author', async () => {
+      stubComments([
+        makeComment({
+          id: 'C1',
+          status: CommunityContentStatus.HIDDEN,
+          hiddenReason: 'Personal data',
+          body: 'my hospital number is 4471',
+          authorUserId: AUTHOR_ID,
+        }),
+      ]);
+      commentRepo.manager.query.mockResolvedValue([{ id: 'C1', count: 2 }]);
+
+      const { comments } = await service.listComments(
+        OTHER_ID,
+        POST_ID,
+        Object.assign(new PaginationDto(), { limit: 20 }),
+      );
+
+      expect(comments[0].body).toBe('');
+      expect(comments[0].visibleToOthers).toBe(false);
+      expect(comments[0].author.displayName).toBe('Community member');
+      // The moderator's reason is not a third party's business.
+      expect(comments[0].hiddenReason).toBeNull();
+      // The replies still have somewhere to hang.
+      expect(comments[0].replyCount).toBe(2);
+    });
+
+    // BR-12, applied to comments.
+    it('shows an author their own hidden comment in full, with the reason', async () => {
+      stubComments([
+        makeComment({
+          id: 'C1',
+          status: CommunityContentStatus.HIDDEN,
+          hiddenReason: 'Personal data',
+          body: 'my hospital number is 4471',
+          authorUserId: AUTHOR_ID,
+        }),
+      ]);
+
+      const { comments } = await service.listComments(
+        AUTHOR_ID,
+        POST_ID,
+        Object.assign(new PaginationDto(), { limit: 20 }),
+      );
+
+      expect(comments[0].body).toBe('my hospital number is 4471');
+      expect(comments[0].hiddenReason).toBe('Personal data');
+      expect(comments[0].visibleToOthers).toBe(false);
+    });
+
+    it('404s a reply list whose comment does not exist', async () => {
+      commentRepo.findOne.mockResolvedValue(null);
+      await expect(
+        service.listReplies(AUTHOR_ID, COMMENT_ID, Object.assign(new PaginationDto(), { limit: 20 })),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    // Guarding through the post is what stops a guessed comment id reaching a thread
+    // under a post the reader cannot see.
+    it('404s a reply list under a post hidden from this reader', async () => {
+      commentRepo.findOne.mockResolvedValue(makeComment());
+      postRepo.findOne.mockResolvedValue(
+        makePost({ status: CommunityContentStatus.HIDDEN, hiddenReason: 'Spam' }),
+      );
+      await expect(
+        service.listReplies(OTHER_ID, COMMENT_ID, Object.assign(new PaginationDto(), { limit: 20 })),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('never spends a reply-count query on a replies page', async () => {
+      commentRepo.findOne.mockResolvedValue(makeComment());
+      const qb = makeQb();
+      qb.getMany.mockResolvedValue([makeComment({ id: 'R1', parentCommentId: COMMENT_ID })]);
+      commentRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const { comments } = await service.listReplies(
+        AUTHOR_ID,
+        COMMENT_ID,
+        Object.assign(new PaginationDto(), { limit: 20 }),
+      );
+
+      expect(comments[0].replyCount).toBe(0);
+      expect(commentRepo.manager.query).not.toHaveBeenCalled();
+    });
   });
 
   // ── Reactions ────────────────────────────────────────────────────────────
@@ -712,7 +918,7 @@ describe('CommunityService', () => {
   // ── Stats ────────────────────────────────────────────────────────────────
   describe('getStats', () => {
     it('counts real rows and never reads the display counters', async () => {
-      const counts = [3, 2, 11, 4, 1];
+      const counts = [3, 2, 11, 4, 1, 7];
       let i = 0;
       const qb = makeQb();
       qb.getCount.mockImplementation(() => Promise.resolve(counts[i++]));
@@ -729,6 +935,20 @@ describe('CommunityService', () => {
       // If any of these came from a counter column, findOne would have been used.
       expect(communityRepo.findOne).not.toHaveBeenCalled();
       expect(postRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('counts replies received on your posts, excluding your own', async () => {
+      const qb = makeQb();
+      qb.getCount.mockResolvedValue(0);
+      commentRepo.createQueryBuilder.mockReturnValue(qb);
+      membershipRepo.createQueryBuilder.mockReturnValue(qb);
+      reactionRepo.createQueryBuilder.mockReturnValue(qb);
+      postRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.getStats(AUTHOR_ID);
+
+      const clauses = qb.andWhere.mock.calls.map((c) => String(c[0]));
+      expect(clauses).toContain('c.author_user_id <> :userId');
     });
   });
 

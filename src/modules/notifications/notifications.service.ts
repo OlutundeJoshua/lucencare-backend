@@ -256,6 +256,12 @@ export class NotificationsService {
           body: `${s('authorName', 'Someone')} replied to ${s('postTitle', 'your post')}.`,
         };
 
+      case NotificationType.COMMUNITY_COMMENT_REPLY:
+        return {
+          title: 'New reply to your comment',
+          body: `${s('authorName', 'Someone')} replied to your comment on ${s('postTitle', 'a post')}.`,
+        };
+
       case NotificationType.COMMUNITY_REACTION_MILESTONE: {
         const count = typeof p['count'] === 'number' ? p['count'] : 0;
         return {
@@ -316,6 +322,7 @@ export class NotificationsService {
         return 'care';
 
       case NotificationType.COMMUNITY_POST_REPLY:
+      case NotificationType.COMMUNITY_COMMENT_REPLY:
       case NotificationType.COMMUNITY_REACTION_MILESTONE:
       case NotificationType.COMMUNITY_CONTENT_HIDDEN:
       case NotificationType.COMMUNITY_REPORT_RESOLVED:

@@ -243,6 +243,7 @@ export enum NotificationType {
   PROGRAM_REVIEWED = 'program_reviewed',
   // Someone commented on, or replied under, a post you wrote.
   COMMUNITY_POST_REPLY = 'community_post_reply',
+  COMMUNITY_COMMENT_REPLY = 'community_comment_reply',
   // Your post or comment crossed a helpful-marks milestone. Never fired per-like:
   // like volume is unbounded, and one row per like would bury the whole feed.
   COMMUNITY_REACTION_MILESTONE = 'community_reaction_milestone',

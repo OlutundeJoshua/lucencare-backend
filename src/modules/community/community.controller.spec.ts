@@ -46,6 +46,7 @@ const mockCommunityService = {
   updatePost: jest.fn(),
   deletePost: jest.fn(),
   listComments: jest.fn(),
+  listReplies: jest.fn(),
   createComment: jest.fn(),
   updateComment: jest.fn(),
   deleteComment: jest.fn(),
@@ -175,6 +176,43 @@ describe('CommunityController', () => {
     it('returns 422 for a limit beyond the cap', async () => {
       app = await buildParticipantApp();
       await request(app.getHttpServer()).get('/community/communities?limit=500').expect(422);
+    });
+  });
+
+  describe('GET /community/comments/:id/replies', () => {
+    it('returns 200 with a cursor in meta', async () => {
+      mockCommunityService.listReplies.mockResolvedValue({
+        comments: [{ id: 'R1', body: 'Same here' }],
+        nextCursor: 'NEXT',
+      });
+      app = await buildParticipantApp();
+
+      const res = await request(app.getHttpServer())
+        .get('/community/comments/01J0000000000000000000CMNT/replies')
+        .expect(200);
+
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.meta.cursor).toBe('NEXT');
+      expect(mockCommunityService.listReplies).toHaveBeenCalledWith(
+        TEST_USER_ID,
+        '01J0000000000000000000CMNT',
+        expect.anything(),
+      );
+    });
+
+    it('returns 403 when RoleGuard denies access', async () => {
+      app = await buildParticipantApp(denyGuard);
+      await request(app.getHttpServer())
+        .get('/community/comments/01J0000000000000000000CMNT/replies')
+        .expect(403);
+    });
+
+    it('returns 404 when the comment does not exist', async () => {
+      mockCommunityService.listReplies.mockRejectedValue(new NotFoundException());
+      app = await buildParticipantApp();
+      await request(app.getHttpServer())
+        .get('/community/comments/01J0000000000000000000CMNT/replies')
+        .expect(404);
     });
   });
 

@@ -66,7 +66,7 @@ const REACTION_MILESTONES = [1, 5, 25, 100];
 
 /** How far back the Trending tab and the portal's "this week" tiles look. */
 const TRENDING_WINDOW_DAYS = 7;
-const TRENDING_LIMIT = 8;
+const TRENDING_LIMIT = 10;
 
 /** Characters kept in a generated slug. */
 const SLUG_ALLOWED = /[^a-z0-9]+/g;
@@ -436,7 +436,18 @@ export class CommunityService {
 
   // ── Comments ───────────────────────────────────────────────────────────────
 
-  /** Keyset id ASC so a thread reads top-down, oldest first. */
+  /**
+   * Top-level comments only, keyset id ASC so a thread reads top-down, oldest first.
+   * Replies are fetched per comment by `listReplies` when the reader expands them.
+   *
+   * Listing top-level and replies together in one flat page was a correctness bug, not
+   * just a layout one: a reply whose parent landed on an earlier page had no parent to
+   * nest under and the client silently dropped it.
+   *
+   * A HIDDEN top-level comment is included only when it still has live replies (BR-18),
+   * mapped to a tombstone by `toCommentViews`. Without it, moderating a parent would take
+   * its replies down with it — which BR-11 explicitly does not do.
+   */
   async listComments(
     userId: string,
     postId: string,
@@ -449,6 +460,52 @@ export class CommunityService {
     const qb = this.commentRepo
       .createQueryBuilder('c')
       .where('c.post_id = :postId', { postId })
+      .andWhere('c.parent_comment_id IS NULL')
+      .andWhere('c.deleted_at IS NULL')
+      .andWhere(
+        `(c.status = :published
+          OR c.author_user_id = :userId
+          OR EXISTS (
+            SELECT 1 FROM community_comments r
+             WHERE r.parent_comment_id = c.id
+               AND r.status = :published
+               AND r.deleted_at IS NULL))`,
+        { published: CommunityContentStatus.PUBLISHED, userId },
+      )
+      .orderBy('c.id', 'ASC')
+      .take(query.limit + 1);
+
+    if (query.cursor) qb.andWhere('c.id > :cursor', { cursor: query.cursor });
+
+    const rows = await qb.getMany();
+    const hasMore = rows.length > query.limit;
+    if (hasMore) rows.pop();
+    const nextCursor = hasMore ? rows[rows.length - 1].id : undefined;
+
+    const replyCounts = await this.replyCountsFor(rows.map((r) => r.id));
+    return { comments: await this.toCommentViews(userId, rows, replyCounts), nextCursor };
+  }
+
+  /**
+   * The replies under one top-level comment. Keyset id ASC, same as the parent list.
+   *
+   * Visibility is resolved through the parent's post, so a hidden post's replies stay
+   * unreachable even when the comment id is guessed.
+   */
+  async listReplies(
+    userId: string,
+    commentId: string,
+    query: PaginationDto,
+  ): Promise<{ comments: CommentView[]; nextCursor?: string }> {
+    const parent = await this.commentRepo.findOne({
+      where: { id: commentId, deletedAt: IsNull() },
+    });
+    if (!parent) throw new NotFoundException(`Comment ${commentId} not found`);
+    await this.getPost(userId, parent.postId);
+
+    const qb = this.commentRepo
+      .createQueryBuilder('c')
+      .where('c.parent_comment_id = :commentId', { commentId })
       .andWhere('c.status = :status', { status: CommunityContentStatus.PUBLISHED })
       .andWhere('c.deleted_at IS NULL')
       .orderBy('c.id', 'ASC')
@@ -479,9 +536,14 @@ export class CommunityService {
     await this.requireActiveCommunity(post.communityId);
     await this.requireMembership(userId, post.communityId);
 
+    // `parent` is the comment the reader clicked Reply on, which may itself be a reply.
+    // `parentCommentId` is where the row is actually stored — its top-level ancestor.
+    // The two differ deliberately: the notification goes to the person you replied to,
+    // while the row stays one level deep.
+    let parent: CommunityComment | null = null;
     let parentCommentId: string | null = null;
     if (dto.parentCommentId) {
-      const parent = await this.commentRepo.findOne({
+      parent = await this.commentRepo.findOne({
         where: { id: dto.parentCommentId, postId, deletedAt: IsNull() },
       });
       if (!parent) throw new NotFoundException(`Comment ${dto.parentCommentId} not found on this post`);
@@ -510,15 +572,34 @@ export class CommunityService {
     });
 
     // Never notify yourself for your own reply.
-    if (post.author.userId !== userId) {
-      await this.tryNotify(post.author.userId, NotificationType.COMMUNITY_POST_REPLY, {
+    const notifyPost = post.author.userId !== userId;
+    // The person you actually replied to. Skipped when that is you, and skipped when
+    // they also own the post — they are already getting COMMUNITY_POST_REPLY, and one
+    // reply must never fire two notifications at the same person.
+    const parentAuthorId = parent && parent.authorUserId !== userId ? parent.authorUserId : null;
+    const notifyParent = parentAuthorId !== null && parentAuthorId !== post.author.userId;
+
+    if (notifyPost || notifyParent) {
+      const authorName = (await this.resolveAuthors([userId])).get(userId)?.displayName ?? 'Someone';
+      const payload = {
         postId,
         postTitle: post.title ?? 'your post',
         communityId: post.communityId,
         communityName: post.communityName,
         commentId: comment.id,
-        authorName: (await this.resolveAuthors([userId])).get(userId)?.displayName ?? 'Someone',
-      });
+        authorName,
+      };
+
+      if (notifyPost) {
+        await this.tryNotify(post.author.userId, NotificationType.COMMUNITY_POST_REPLY, payload);
+      }
+      if (notifyParent) {
+        await this.tryNotify(parentAuthorId, NotificationType.COMMUNITY_COMMENT_REPLY, {
+          ...payload,
+          postTitle: post.title ?? 'a post',
+          parentCommentId: parent?.id,
+        });
+      }
     }
 
     const [view] = await this.toCommentViews(userId, [comment]);
@@ -725,8 +806,14 @@ export class CommunityService {
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
 
-    const [questionsAnswered, communitiesJoined, helpfulMarks, postsWritten, postsThisMonth] =
-      await Promise.all([
+    const [
+      questionsAnswered,
+      communitiesJoined,
+      helpfulMarks,
+      postsWritten,
+      postsThisMonth,
+      repliesReceived,
+    ] = await Promise.all([
         this.commentRepo
           .createQueryBuilder('c')
           .where('c.author_user_id = :userId', { userId })
@@ -758,9 +845,28 @@ export class CommunityService {
           .andWhere('p.deleted_at IS NULL')
           .andWhere('p.created_at >= :monthStart', { monthStart })
           .getCount(),
+        // The only stat here that joins. Driven by (author_user_id, status) on posts,
+        // then (post_id, status, id) on comments, so it scales with how much the caller
+        // has written rather than with platform volume.
+        this.commentRepo
+          .createQueryBuilder('c')
+          .innerJoin(CommunityPost, 'p', 'p.id = c.post_id')
+          .where('p.author_user_id = :userId', { userId })
+          .andWhere('c.author_user_id <> :userId', { userId })
+          .andWhere('c.status = :status', { status: CommunityContentStatus.PUBLISHED })
+          .andWhere('c.deleted_at IS NULL')
+          .andWhere('p.deleted_at IS NULL')
+          .getCount(),
       ]);
 
-    return { questionsAnswered, communitiesJoined, helpfulMarks, postsWritten, postsThisMonth };
+    return {
+      questionsAnswered,
+      communitiesJoined,
+      helpfulMarks,
+      postsWritten,
+      postsThisMonth,
+      repliesReceived,
+    };
   }
 
   /** The four tiles across the top of the portal. Platform-wide, not per-user. */
@@ -1151,27 +1257,76 @@ export class CommunityService {
     });
   }
 
-  private async toCommentViews(userId: string, comments: CommunityComment[]): Promise<CommentView[]> {
+  /**
+   * Maps comment rows to views. `replyCounts` is supplied only for the top-level list —
+   * a reply can never have replies of its own (BR-14), so the replies list skips the
+   * extra query entirely and every `replyCount` is 0.
+   *
+   * A hidden row reaching this method is a BR-18 tombstone: it survived `listComments`
+   * only because live replies hang off it. For everyone but its author, body and author
+   * are stripped here rather than at the query, so the disclosure is exactly "something
+   * was removed" — never the content, never who wrote it. Its own author still sees it
+   * in full with `hiddenReason`, which is BR-12 applied to comments.
+   */
+  private async toCommentViews(
+    userId: string,
+    comments: CommunityComment[],
+    replyCounts?: Map<string, number>,
+  ): Promise<CommentView[]> {
     if (comments.length === 0) return [];
 
+    const shown = comments.filter(
+      (c) => c.status === CommunityContentStatus.PUBLISHED || c.authorUserId === userId,
+    );
     const [authors, reacted] = await Promise.all([
-      this.resolveAuthors(comments.map((c) => c.authorUserId)),
-      this.reactedIdsAmong(userId, CommunityReportTarget.COMMENT, comments.map((c) => c.id)),
+      this.resolveAuthors(shown.map((c) => c.authorUserId)),
+      this.reactedIdsAmong(userId, CommunityReportTarget.COMMENT, shown.map((c) => c.id)),
     ]);
 
-    return comments.map((c) => ({
-      id: c.id,
-      postId: c.postId,
-      parentCommentId: c.parentCommentId ?? null,
-      author: authors.get(c.authorUserId) ?? this.unknownAuthor(c.authorUserId),
-      body: c.body,
-      reactionCount: c.reactionCount,
-      reactedByMe: reacted.has(c.id),
-      createdAt: c.createdAt.toISOString(),
-      status: c.status,
-      visibleToOthers: c.status === CommunityContentStatus.PUBLISHED,
-      hiddenReason: c.hiddenReason ?? null,
-    }));
+    return comments.map((c) => {
+      const hidden = c.status !== CommunityContentStatus.PUBLISHED;
+      // A tombstone is a hidden comment seen by anyone other than its author.
+      const tombstone = hidden && c.authorUserId !== userId;
+      return {
+        id: c.id,
+        postId: c.postId,
+        parentCommentId: c.parentCommentId ?? null,
+        author: tombstone
+          ? this.unknownAuthor('')
+          : (authors.get(c.authorUserId) ?? this.unknownAuthor(c.authorUserId)),
+        body: tombstone ? '' : c.body,
+        reactionCount: tombstone ? 0 : c.reactionCount,
+        reactedByMe: !tombstone && reacted.has(c.id),
+        createdAt: c.createdAt.toISOString(),
+        status: c.status,
+        visibleToOthers: !hidden,
+        hiddenReason: tombstone ? null : (c.hiddenReason ?? null),
+        replyCount: replyCounts?.get(c.id) ?? 0,
+      };
+    });
+  }
+
+  /**
+   * Live reply counts for a page of top-level comments, in one grouped query — the same
+   * batched-lookup shape as `reactedIdsAmong` and `joinedIdsAmong`.
+   *
+   * Computed rather than denormalised onto a `reply_count` column: that column would need
+   * maintaining across create, delete, hide and restore, and BR-16 already keeps this
+   * module's display counters out of anything that has to be correct. One indexed query
+   * per page of 20 is the cheaper side of that trade.
+   */
+  private async replyCountsFor(parentIds: string[]): Promise<Map<string, number>> {
+    if (parentIds.length === 0) return new Map();
+
+    const rows: Array<{ id: string; count: number }> = await this.commentRepo.manager.query(
+      `SELECT parent_comment_id AS id, COUNT(*)::int AS count
+         FROM community_comments
+        WHERE parent_comment_id = ANY($1::char(26)[])
+          AND status = $2 AND deleted_at IS NULL
+        GROUP BY parent_comment_id`,
+      [parentIds, CommunityContentStatus.PUBLISHED],
+    );
+    return new Map(rows.map((r) => [r.id, Number(r.count)]));
   }
 
   private async toReportViews(reports: CommunityReport[]): Promise<ReportView[]> {

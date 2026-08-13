@@ -183,13 +183,24 @@ export class CommunityController {
   // ── Comments ───────────────────────────────────────────────────────────────
 
   @Get('posts/:id/comments')
-  @ApiOperation({ summary: 'The thread under a post, oldest first' })
+  @ApiOperation({ summary: 'Top-level comments under a post, oldest first' })
   async listComments(
     @Param('id') postId: string,
     @Query() query: PaginationDto,
     @CurrentUser() user: JwtPayload,
   ) {
     const { comments, nextCursor } = await this.communityService.listComments(user.sub, postId, query);
+    return { data: comments, meta: { cursor: nextCursor, limit: query.limit } };
+  }
+
+  @Get('comments/:id/replies')
+  @ApiOperation({ summary: 'The replies under one comment, oldest first' })
+  async listReplies(
+    @Param('id') commentId: string,
+    @Query() query: PaginationDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    const { comments, nextCursor } = await this.communityService.listReplies(user.sub, commentId, query);
     return { data: comments, meta: { cursor: nextCursor, limit: query.limit } };
   }
 

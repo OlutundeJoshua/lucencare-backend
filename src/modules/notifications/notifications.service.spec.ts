@@ -197,6 +197,7 @@ describe('NotificationsService', () => {
     describe('community types', () => {
       const COMMUNITY_TYPES = [
         NotificationType.COMMUNITY_POST_REPLY,
+        NotificationType.COMMUNITY_COMMENT_REPLY,
         NotificationType.COMMUNITY_REACTION_MILESTONE,
         NotificationType.COMMUNITY_CONTENT_HIDDEN,
         NotificationType.COMMUNITY_REPORT_RESOLVED,

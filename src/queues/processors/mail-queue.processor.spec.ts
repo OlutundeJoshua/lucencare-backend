@@ -5,6 +5,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import {
   SEND_APPLICATION_STATUS_JOB,
   SEND_APPOINTMENT_CONFIRMATION_JOB,
+  SEND_APPOINTMENT_REMINDER_JOB,
   SEND_ENROLLMENT_OUTCOME_JOB,
   SEND_MEDICATION_REMINDER_EMAIL_JOB,
   SEND_OTP_JOB,
@@ -19,6 +20,7 @@ import { SendApplicationStatusProcessor } from './send-application-status.proces
 import { SendEnrollmentOutcomeProcessor } from './send-enrollment-outcome.processor';
 import { SendProgramStatusProcessor } from './send-program-status.processor';
 import { SendAppointmentConfirmationProcessor } from './send-appointment-confirmation.processor';
+import { SendAppointmentReminderProcessor } from './send-appointment-reminder.processor';
 import { SendMedicationReminderEmailProcessor } from './send-medication-reminder-email.processor';
 import { SendOtpProcessor } from './send-otp.processor';
 import { SendPatientCredentialsProcessor } from './send-patient-credentials.processor';
@@ -31,6 +33,7 @@ describe('MailQueueProcessor', () => {
   let sendPatientCredentialsProcessor: { process: jest.Mock };
   let sendMedicationReminderEmailProcessor: { process: jest.Mock };
   let sendAppointmentConfirmationProcessor: { process: jest.Mock };
+  let sendAppointmentReminderProcessor: { process: jest.Mock };
   let sendPatientOnboardingWelcomeProcessor: { process: jest.Mock };
   let sendResetPasswordProcessor: { process: jest.Mock };
   let sendApplicationStatusProcessor: { process: jest.Mock };
@@ -42,6 +45,7 @@ describe('MailQueueProcessor', () => {
     sendPatientCredentialsProcessor = { process: jest.fn() };
     sendMedicationReminderEmailProcessor = { process: jest.fn() };
     sendAppointmentConfirmationProcessor = { process: jest.fn() };
+    sendAppointmentReminderProcessor = { process: jest.fn() };
     sendPatientOnboardingWelcomeProcessor = { process: jest.fn() };
     sendResetPasswordProcessor = { process: jest.fn() };
     sendApplicationStatusProcessor = { process: jest.fn() };
@@ -55,6 +59,7 @@ describe('MailQueueProcessor', () => {
         { provide: SendPatientCredentialsProcessor, useValue: sendPatientCredentialsProcessor },
         { provide: SendMedicationReminderEmailProcessor, useValue: sendMedicationReminderEmailProcessor },
         { provide: SendAppointmentConfirmationProcessor, useValue: sendAppointmentConfirmationProcessor },
+        { provide: SendAppointmentReminderProcessor, useValue: sendAppointmentReminderProcessor },
         { provide: SendPatientOnboardingWelcomeProcessor, useValue: sendPatientOnboardingWelcomeProcessor },
         { provide: SendResetPasswordProcessor, useValue: sendResetPasswordProcessor },
         { provide: SendApplicationStatusProcessor, useValue: sendApplicationStatusProcessor },
@@ -79,6 +84,15 @@ describe('MailQueueProcessor', () => {
     await processor.process(job);
     expect(sendAppointmentConfirmationProcessor.process).toHaveBeenCalledWith(job);
     expect(sendOtpProcessor.process).not.toHaveBeenCalled();
+  });
+
+  // The reminder and the confirmation are two different emails about the same
+  // appointment — routing one to the other's processor would send the wrong copy.
+  it('routes send_appointment_reminder jobs to SendAppointmentReminderProcessor', async () => {
+    const job = { name: SEND_APPOINTMENT_REMINDER_JOB, data: { targets: [] } } as Job;
+    await processor.process(job);
+    expect(sendAppointmentReminderProcessor.process).toHaveBeenCalledWith(job);
+    expect(sendAppointmentConfirmationProcessor.process).not.toHaveBeenCalled();
   });
 
   it('routes send_otp jobs to SendOtpProcessor', async () => {

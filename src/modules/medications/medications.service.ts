@@ -6,6 +6,15 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
 import { AuditAction, DoseStatus, NotificationType } from 'src/common/enums';
+import { LocalClock } from 'src/common/interfaces/local-clock.interface';
+import { ParsedTimeLabel } from 'src/common/interfaces/parsed-time-label.interface';
+import { firstName } from 'src/common/utils/first-name.util';
+import {
+  appliesOnDate,
+  minutesUntilScheduled,
+  nowInTimezone,
+  parseTimeLabel,
+} from 'src/common/utils/time-label.util';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
 import { PatientsService } from 'src/modules/patients/patients.service';
@@ -25,22 +34,22 @@ import { RefillAlertResult } from './interfaces/refill-alert-result.interface';
 import { MedicationStats } from './interfaces/medication-stats.interface';
 import { ReminderTarget } from './interfaces/reminder-target.interface';
 import { RefillAlertTarget } from './interfaces/refill-alert-target.interface';
-import { ParsedDoseTime } from './interfaces/parsed-dose-time.interface';
 
 const URGENT_THRESHOLD_DAYS = 7;
 const UPCOMING_THRESHOLD_DAYS = 14;
 const MAX_STREAK_LOOKBACK_DAYS = 365;
 const DUE_NOW_WINDOW_MINUTES = 15;
 const DEFAULT_REMINDER_WINDOW_MINUTES = 30;
+const DEFAULT_DOSE_GRACE_MINUTES = 60;
+const DEFAULT_LATER_DOSE_GRACE_MINUTES = 120;
 
 /**
- * A `scheduleTimes` entry: a 12-hour label, optionally prefixed with a weekday for
- * weekly medications — `'8:00 AM'` or `'Monday · 8:00 AM'`.
- *
- * Dose times are free-form: the patient picks any time, so nothing here may assume a
- * fixed set of slots.
+ * Upper bound on rows `markOverdueDosesMissed` touches in one run. The sweep is
+ * repeatable, so a backlog larger than this — the first run after deploy, or after
+ * the worker has been down — is drained over consecutive ticks rather than loaded
+ * into memory at once. Oldest doses are swept first.
  */
-const DOSE_TIME_PATTERN = /^(?:([A-Za-z]+)\s*·\s*)?(\d{1,2}):(\d{2})\s*(AM|PM)$/i;
+const MISSED_SWEEP_BATCH_SIZE = 1000;
 
 @Injectable()
 export class MedicationsService {
@@ -138,11 +147,11 @@ export class MedicationsService {
     const targetDate = date ?? this.todayIso();
 
     const medications = await this.medicationRepo.find({ where: { patientId: patient.id } });
-    await this.ensureDoseLogsForDate(patient.id, medications, targetDate);
+    const nowLocal = this.nowInTimezone(new Date(), patient.timezone ?? 'UTC');
+    await this.ensureDoseLogsForDate(patient.id, medications, targetDate, nowLocal);
 
     const logs = await this.doseLogRepo.find({ where: { patientId: patient.id, doseDate: targetDate } });
     const medById = new Map(medications.map((m) => [m.id, m]));
-    const nowLocal = this.nowInTimezone(new Date(), patient.timezone ?? 'UTC');
 
     const slots = new Map<string, ScheduleSlotResult>();
     for (const log of logs) {
@@ -275,9 +284,13 @@ export class MedicationsService {
       where: { patientId: patient.id, doseDate: today, status: In([DoseStatus.PENDING, DoseStatus.LATER]) },
     });
 
+    const missedToday = await this.doseLogRepo.count({
+      where: { patientId: patient.id, doseDate: today, status: DoseStatus.MISSED },
+    });
+
     const adherenceStreakDays = await this.calcAdherenceStreak(patient.id);
 
-    return { activeMeds, takenToday, dueToday, adherenceStreakDays };
+    return { activeMeds, takenToday, dueToday, missedToday, adherenceStreakDays };
   }
 
   async registerReminders(userId: string, dto: RegisterRemindersDto): Promise<{ registered: true }> {
@@ -328,6 +341,16 @@ export class MedicationsService {
       const local = this.nowInTimezone(now, patient.timezone ?? 'UTC');
       if (!local) continue;
 
+      // Resolved lazily and once per patient, not per dose: the reminder copy quotes
+      // the streak, but calcAdherenceStreak walks day by day, so computing it for a
+      // patient with no dose due on this tick — or once per scheduled time — would
+      // multiply the query count for nothing.
+      let streakDays: number | undefined;
+      const streakFor = async () => {
+        if (streakDays === undefined) streakDays = await this.calcAdherenceStreak(patient.id);
+        return streakDays;
+      };
+
       for (const med of medsByPatientId.get(patient.id) ?? []) {
         for (const scheduledTime of med.scheduleTimes) {
           const parsed = this.parseDoseTime(scheduledTime);
@@ -340,7 +363,14 @@ export class MedicationsService {
           if (!due) continue;
 
           // The medication's own label, so the email states the time the patient chose.
-          targets.push({ email, medicationName: med.name, dosage: med.dosage, scheduledTime });
+          targets.push({
+            email,
+            firstName: firstName(patient.name ?? ''),
+            medicationName: med.name,
+            dosage: med.dosage,
+            scheduledTime,
+            streakDays: await streakFor(),
+          });
         }
       }
     }
@@ -377,35 +407,126 @@ export class MedicationsService {
     return targets;
   }
 
-  private nowInTimezone(now: Date, timezone: string): { dateIso: string; minutes: number } | undefined {
-    try {
-      const parts = new Intl.DateTimeFormat('en-GB', {
-        timeZone: timezone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      }).formatToParts(now);
-      const get = (type: string) => parts.find((p) => p.type === type)?.value;
-      const year = get('year');
-      const month = get('month');
-      const day = get('day');
-      const hour = get('hour');
-      const minute = get('minute');
-      if (!year || !month || !day || !hour || !minute) return undefined;
-      return { dateIso: `${year}-${month}-${day}`, minutes: Number(hour) * 60 + Number(minute) };
-    } catch {
-      return undefined;
+  /**
+   * Called by medication-missed-sweep.processor.ts. Flips PENDING and LATER dose logs
+   * whose grace period has elapsed to MISSED, and returns how many rows changed.
+   *
+   * Not expressible as a single UPDATE: `scheduled_time` is a free-form label, not a
+   * time column, and the grace test is anchored to the patient's own timezone — so the
+   * candidate rows have to be read, parsed and filtered in memory, the same way
+   * findDueReminderTargets does for reminders.
+   */
+  async markOverdueDosesMissed(now: Date = new Date()): Promise<number> {
+    // dose_date is compared against the DB's CURRENT_DATE (UTC) while the grace test
+    // below is patient-local. That mismatch is safe in this direction: it can only
+    // over-select by at most a day, and the per-row check rejects anything not
+    // genuinely past grace. Oldest first, so a backlog drains in order.
+    const candidates = await this.doseLogRepo
+      .createQueryBuilder('log')
+      .where('log.status IN (:...statuses)', {
+        statuses: [DoseStatus.PENDING, DoseStatus.LATER],
+      })
+      .andWhere('log.dose_date <= CURRENT_DATE')
+      .orderBy('log.dose_date', 'ASC')
+      .addOrderBy('log.id', 'ASC')
+      .take(MISSED_SWEEP_BATCH_SIZE)
+      .getMany();
+
+    if (candidates.length === 0) return 0;
+
+    const patientIds = [...new Set(candidates.map((log) => log.patientId))];
+    const patients = await this.patientRepo.find({ where: { id: In(patientIds) } });
+    const timezoneByPatientId = new Map(patients.map((p) => [p.id, p.timezone ?? 'UTC']));
+
+    // One nowInTimezone call per distinct zone rather than per row — a patient with a
+    // week of overdue doses would otherwise re-derive the same local time every time.
+    const localByTimezone = new Map<string, { dateIso: string; minutes: number } | undefined>();
+    const localFor = (timezone: string) => {
+      if (!localByTimezone.has(timezone)) {
+        localByTimezone.set(timezone, this.nowInTimezone(now, timezone));
+      }
+      return localByTimezone.get(timezone);
+    };
+
+    const overdueIds: string[] = [];
+    for (const log of candidates) {
+      const timezone = timezoneByPatientId.get(log.patientId);
+      if (!timezone) continue;
+
+      const elapsed = this.minutesSinceScheduled(log.doseDate, log.scheduledTime, localFor(timezone));
+      if (elapsed === undefined) continue;
+
+      if (elapsed > this.graceMinutesFor(log.status)) overdueIds.push(log.id);
     }
+
+    if (overdueIds.length === 0) return 0;
+
+    // Re-asserting the status in the WHERE closes the race with a patient logging one
+    // of these doses between the read above and this write — their TAKEN wins.
+    const result = await this.doseLogRepo
+      .createQueryBuilder()
+      .update(MedicationDoseLog)
+      .set({ status: DoseStatus.MISSED })
+      .where('id IN (:...ids)', { ids: overdueIds })
+      .andWhere('status IN (:...statuses)', {
+        statuses: [DoseStatus.PENDING, DoseStatus.LATER],
+      })
+      .execute();
+
+    return result.affected ?? 0;
   }
 
-  // Overlays DUE_NOW onto a PENDING dose when the patient's local time is
-  // within DUE_NOW_WINDOW_MINUTES of the scheduled slot. Only applies to the
-  // day being viewed as "today" in the patient's own timezone. This is a
-  // read-time overlay only — the persisted log row stays PENDING, since
-  // LogDoseDto never accepts DUE_NOW as a status a patient can write.
+  private nowInTimezone(now: Date, timezone: string): LocalClock | undefined {
+    return nowInTimezone(now, timezone);
+  }
+
+  /**
+   * Minutes elapsed since a dose's scheduled moment, in the patient's own timezone.
+   * Negative while the dose is still ahead.
+   *
+   * Returns undefined when the label is unparseable, does not apply on that date, or
+   * the patient's timezone could not be read. Every caller treats that as "skip",
+   * never as "missed" — one unreadable label must not silently mark a patient
+   * non-adherent, the same way it never breaks their schedule elsewhere.
+   */
+  private minutesSinceScheduled(
+    doseDate: string,
+    scheduledTime: string,
+    nowLocal: LocalClock | undefined,
+  ): number | undefined {
+    // The shared helper counts days at UTC midnight, which is what keeps an 11:59 PM
+    // dose read at 00:30 the next local day only 31 minutes old rather than a day late.
+    const until = minutesUntilScheduled(doseDate, scheduledTime, nowLocal);
+    return until === undefined ? undefined : -until;
+  }
+
+  /** LATER doses get the longer grace — the patient deferred them deliberately. */
+  private graceMinutesFor(status: DoseStatus): number {
+    return status === DoseStatus.LATER ? this.laterDoseGraceMinutes() : this.doseGraceMinutes();
+  }
+
+  private doseGraceMinutes(): number {
+    const configured = this.configService.get<number>('app.medicationDoseGraceMinutes');
+    return configured && configured > 0 ? configured : DEFAULT_DOSE_GRACE_MINUTES;
+  }
+
+  private laterDoseGraceMinutes(): number {
+    const configured = this.configService.get<number>('app.medicationLaterDoseGraceMinutes');
+    return configured && configured > 0 ? configured : DEFAULT_LATER_DOSE_GRACE_MINUTES;
+  }
+
+  // Overlays DUE_NOW onto a PENDING dose from DUE_NOW_WINDOW_MINUTES before its slot
+  // onwards. Only applies to the day being viewed as "today" in the patient's own
+  // timezone. Read-time only — the persisted row stays PENDING, since LogDoseDto
+  // never accepts DUE_NOW as a status a patient can write.
+  //
+  // The window is deliberately ASYMMETRIC and open-ended on the past side. It used to
+  // be ±15 minutes, which meant a dose 16+ minutes late fell back to plain PENDING and
+  // the frontend labelled a dose that was already in the past as "upcoming". Capping
+  // the overlay at the grace period instead would reintroduce the same bug in the gap
+  // between grace expiring and the next sweep tick. So PENDING now means only "still
+  // ahead": once the slot is reached the dose reads DUE_NOW until the sweep persists
+  // MISSED, at which point this overlay no longer applies and the real status shows.
   private resolveDisplayStatus(
     status: DoseStatus,
     scheduledTime: string,
@@ -414,41 +535,24 @@ export class MedicationsService {
   ): DoseStatus {
     if (status !== DoseStatus.PENDING || !nowLocal || nowLocal.dateIso !== doseDate) return status;
 
-    const parsed = this.parseDoseTime(scheduledTime);
-    if (!parsed) return status;
+    const elapsed = this.minutesSinceScheduled(doseDate, scheduledTime, nowLocal);
+    if (elapsed === undefined) return status;
 
-    return Math.abs(nowLocal.minutes - parsed.minutes) <= DUE_NOW_WINDOW_MINUTES
-      ? DoseStatus.DUE_NOW
-      : status;
+    return elapsed >= -DUE_NOW_WINDOW_MINUTES ? DoseStatus.DUE_NOW : status;
   }
 
   /**
-   * The single parser for `scheduleTimes` entries — used by the due-now overlay, the
-   * reminder window, dose-log creation and slot ordering. Returns undefined for a
-   * label it cannot read, and every caller treats that as "skip", never as an error:
-   * one unparseable row must not break a patient's whole schedule.
+   * The parser for `scheduleTimes` entries — used by the due-now overlay, the reminder
+   * window, dose-log creation and slot ordering. Shared with appointments, which parse
+   * the same style of label, so both stay in step: see common/utils/time-label.util.ts.
    */
-  private parseDoseTime(label: string): ParsedDoseTime | undefined {
-    const match = DOSE_TIME_PATTERN.exec(label.trim());
-    if (!match) return undefined;
-
-    let hour = Number(match[2]) % 12;
-    if (match[4].toUpperCase() === 'PM') hour += 12;
-    return { minutes: hour * 60 + Number(match[3]), weekday: match[1] };
-  }
-
-  /** Full weekday name for a plain ISO date, read in UTC so no timezone shifts it. */
-  private weekdayForIsoDate(dateIso: string): string {
-    return new Date(`${dateIso}T00:00:00Z`).toLocaleDateString('en-US', {
-      weekday: 'long',
-      timeZone: 'UTC',
-    });
+  private parseDoseTime(label: string): ParsedTimeLabel | undefined {
+    return parseTimeLabel(label);
   }
 
   /** True when a dose time applies on the given date — always, unless it names a day. */
-  private appliesOnDate(parsed: ParsedDoseTime, dateIso: string): boolean {
-    if (!parsed.weekday) return true;
-    return parsed.weekday.toLowerCase() === this.weekdayForIsoDate(dateIso).toLowerCase();
+  private appliesOnDate(parsed: ParsedTimeLabel, dateIso: string): boolean {
+    return appliesOnDate(parsed, dateIso);
   }
 
   private async getOwnedMedication(userId: string, id: string): Promise<Medication> {
@@ -458,7 +562,20 @@ export class MedicationsService {
     return medication;
   }
 
-  private async ensureDoseLogsForDate(patientId: string, medications: Medication[], date: string): Promise<void> {
+  /**
+   * Dose rows are created lazily — only when someone reads that date's schedule. A row
+   * for a slot the patient never looked at is therefore born hours after the fact, and
+   * the sweep never saw it because it did not exist. So the correct status is decided
+   * here at insert time too: a slot already past its grace is inserted MISSED rather
+   * than PENDING, which is what stops a first read at 8 PM showing an 8 AM dose as
+   * upcoming until the next tick.
+   */
+  private async ensureDoseLogsForDate(
+    patientId: string,
+    medications: Medication[],
+    date: string,
+    nowLocal: { dateIso: string; minutes: number } | undefined,
+  ): Promise<void> {
     const rows = medications.flatMap((med) =>
       med.scheduleTimes
         // A weekly dose belongs to one weekday. Without this filter it was logged
@@ -467,14 +584,18 @@ export class MedicationsService {
           const parsed = this.parseDoseTime(time);
           return parsed ? this.appliesOnDate(parsed, date) : false;
         })
-        .map((time) => ({
-          id: ulid(),
-          medicationId: med.id,
-          patientId,
-          doseDate: date,
-          scheduledTime: time,
-          status: DoseStatus.PENDING,
-        })),
+        .map((time) => {
+          const elapsed = this.minutesSinceScheduled(date, time, nowLocal);
+          const missed = elapsed !== undefined && elapsed > this.doseGraceMinutes();
+          return {
+            id: ulid(),
+            medicationId: med.id,
+            patientId,
+            doseDate: date,
+            scheduledTime: time,
+            status: missed ? DoseStatus.MISSED : DoseStatus.PENDING,
+          };
+        }),
     );
     if (rows.length === 0) return;
 
@@ -533,7 +654,12 @@ export class MedicationsService {
       where: {
         patientId,
         doseDate: dateIso,
-        status: In([DoseStatus.PENDING, DoseStatus.LATER, DoseStatus.SKIPPED]),
+        status: In([
+          DoseStatus.PENDING,
+          DoseStatus.LATER,
+          DoseStatus.SKIPPED,
+          DoseStatus.MISSED,
+        ]),
       },
     });
     return nonTaken === 0;

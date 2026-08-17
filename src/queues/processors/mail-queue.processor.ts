@@ -5,6 +5,7 @@ import {
   MAIL_QUEUE,
   SEND_APPLICATION_STATUS_JOB,
   SEND_APPOINTMENT_CONFIRMATION_JOB,
+  SEND_APPOINTMENT_REMINDER_JOB,
   SEND_ENROLLMENT_OUTCOME_JOB,
   SEND_MEDICATION_REMINDER_EMAIL_JOB,
   SEND_OTP_JOB,
@@ -18,6 +19,7 @@ import {
 import { SendApplicationStatusProcessor } from './send-application-status.processor';
 import { SendEnrollmentOutcomeProcessor } from './send-enrollment-outcome.processor';
 import { SendAppointmentConfirmationProcessor } from './send-appointment-confirmation.processor';
+import { SendAppointmentReminderProcessor } from './send-appointment-reminder.processor';
 import { SendMedicationReminderEmailProcessor } from './send-medication-reminder-email.processor';
 import { SendOtpProcessor } from './send-otp.processor';
 import { SendPatientCredentialsProcessor } from './send-patient-credentials.processor';
@@ -32,6 +34,7 @@ export class MailQueueProcessor extends WorkerHost {
     private readonly sendPatientCredentialsProcessor: SendPatientCredentialsProcessor,
     private readonly sendMedicationReminderEmailProcessor: SendMedicationReminderEmailProcessor,
     private readonly sendAppointmentConfirmationProcessor: SendAppointmentConfirmationProcessor,
+    private readonly sendAppointmentReminderProcessor: SendAppointmentReminderProcessor,
     private readonly sendPatientOnboardingWelcomeProcessor: SendPatientOnboardingWelcomeProcessor,
     private readonly sendResetPasswordProcessor: SendResetPasswordProcessor,
     private readonly sendApplicationStatusProcessor: SendApplicationStatusProcessor,
@@ -51,6 +54,8 @@ export class MailQueueProcessor extends WorkerHost {
         return this.sendMedicationReminderEmailProcessor.process(job);
       case SEND_APPOINTMENT_CONFIRMATION_JOB:
         return this.sendAppointmentConfirmationProcessor.process(job);
+      case SEND_APPOINTMENT_REMINDER_JOB:
+        return this.sendAppointmentReminderProcessor.process(job);
       case SEND_PATIENT_ONBOARDING_WELCOME_JOB:
         return this.sendPatientOnboardingWelcomeProcessor.process(job);
       case SEND_RESET_PASSWORD_JOB:

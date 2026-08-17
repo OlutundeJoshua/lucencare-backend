@@ -218,6 +218,19 @@ describe('MedicationsController', () => {
 
       expect(res.status).toBe(422);
     });
+
+    // 'missed' is a real DoseStatus, but a system-written one — the sweep sets it.
+    // Letting a patient post it would let them mark their own doses missed.
+    it('returns 422 for the system-written missed status', async () => {
+      app = await buildApp();
+
+      const res = await request(app.getHttpServer())
+        .post(`/medications/${MEDICATION_ID}/doses/log`)
+        .send({ scheduledTime: '8:00 AM', status: 'missed' });
+
+      expect(res.status).toBe(422);
+      expect(mockMedicationsService.logDose).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /medications/refills', () => {

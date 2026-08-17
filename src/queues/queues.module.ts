@@ -28,8 +28,11 @@ import { SendResetPasswordProcessor } from './processors/send-reset-password.pro
 import { SendPatientCredentialsProcessor } from './processors/send-patient-credentials.processor';
 import { MedicationReminderTickProcessor } from './processors/medication-reminder-tick.processor';
 import { MedicationRefillCheckProcessor } from './processors/medication-refill-check.processor';
+import { MedicationMissedSweepProcessor } from './processors/medication-missed-sweep.processor';
 import { SendMedicationReminderEmailProcessor } from './processors/send-medication-reminder-email.processor';
 import { SendAppointmentConfirmationProcessor } from './processors/send-appointment-confirmation.processor';
+import { AppointmentReminderTickProcessor } from './processors/appointment-reminder-tick.processor';
+import { SendAppointmentReminderProcessor } from './processors/send-appointment-reminder.processor';
 import { SendPatientOnboardingWelcomeProcessor } from './processors/send-patient-onboarding-welcome.processor';
 import { SendApplicationStatusProcessor } from './processors/send-application-status.processor';
 import { SendEnrollmentOutcomeProcessor } from './processors/send-enrollment-outcome.processor';
@@ -38,6 +41,7 @@ import { MailQueueProcessor } from './processors/mail-queue.processor';
 import { NotificationsQueueProcessor } from './processors/notifications-queue.processor';
 import { AdminQueueProcessor } from './processors/admin-queue.processor';
 
+import { AppointmentsModule } from 'src/modules/appointments/appointments.module';
 import { MedicationsModule } from 'src/modules/medications/medications.module';
 import { NotificationsModule } from 'src/modules/notifications/notifications.module';
 import { MailModule } from 'src/modules/mail/mail.module';
@@ -65,6 +69,7 @@ import { MailModule } from 'src/modules/mail/mail.module';
     // recipient list; ProgramOutcomeProcessor resolves the NGO's staff and org name.
     TypeOrmModule.forFeature([User, Organization]),
     MedicationsModule,
+    AppointmentsModule,
     NotificationsModule,
     MailModule,
   ],
@@ -82,8 +87,11 @@ import { MailModule } from 'src/modules/mail/mail.module';
     SendPatientCredentialsProcessor,
     MedicationReminderTickProcessor,
     MedicationRefillCheckProcessor,
+    MedicationMissedSweepProcessor,
     SendMedicationReminderEmailProcessor,
     SendAppointmentConfirmationProcessor,
+    AppointmentReminderTickProcessor,
+    SendAppointmentReminderProcessor,
     SendPatientOnboardingWelcomeProcessor,
     SendApplicationStatusProcessor,
     SendEnrollmentOutcomeProcessor,

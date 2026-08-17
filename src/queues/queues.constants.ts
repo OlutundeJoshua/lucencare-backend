@@ -20,8 +20,15 @@ export const SEND_RESET_PASSWORD_JOB = 'send_reset_password';
 export const SEND_PATIENT_CREDENTIALS_JOB = 'send_patient_credentials';
 export const MEDICATION_REMINDER_TICK_JOB = 'medication_reminder_tick';
 export const MEDICATION_REFILL_CHECK_JOB = 'medication_refill_check';
+// Persists MISSED on doses whose grace period elapsed unlogged. Unlike the other two
+// medication ticks it writes to medication_dose_logs rather than only reading them.
+export const MEDICATION_MISSED_SWEEP_JOB = 'medication_missed_sweep';
 export const SEND_MEDICATION_REMINDER_EMAIL_JOB = 'send_medication_reminder_email';
 export const SEND_APPOINTMENT_CONFIRMATION_JOB = 'send_appointment_confirmation';
+// Scans for appointments coming due and fans out reminder emails. Distinct from
+// SEND_APPOINTMENT_CONFIRMATION_JOB, which fires once at booking/reschedule time.
+export const APPOINTMENT_REMINDER_TICK_JOB = 'appointment_reminder_tick';
+export const SEND_APPOINTMENT_REMINDER_JOB = 'send_appointment_reminder';
 export const SEND_PATIENT_ONBOARDING_WELCOME_JOB = 'send_patient_onboarding_welcome';
 // Covers all three application lifecycle emails (received / approved / rejected) for
 // the four roles gated behind admin approval — see ApplicationEmailEvent.

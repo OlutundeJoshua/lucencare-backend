@@ -289,6 +289,12 @@ export enum DoseStatus {
   // PENDING dose that falls within the due-now window. Never persisted:
   // LogDoseDto restricts patient-submitted statuses to exclude it.
   DUE_NOW = 'due_now',
+  // System-written, and the only persisted status a patient never submits.
+  // Set by the medication missed-sweep job once a dose's grace period elapses
+  // with nothing logged, and by lazy dose-log creation for a slot that was
+  // already past grace when the schedule was first read. A patient may still
+  // overwrite it by logging the dose late.
+  MISSED = 'missed',
 }
 
 // Subset of DoseStatus a patient may actually submit via POST /medications/:id/doses/log —
@@ -326,6 +332,17 @@ export enum AppointmentStatus {
 export enum AppointmentConfirmationAction {
   CREATED = 'created',
   RESCHEDULED = 'rescheduled',
+}
+
+/**
+ * How far ahead of an appointment a reminder goes out. Each member is one email a
+ * patient receives for the same appointment, so the set doubles as the send schedule:
+ * add a member plus its entry in APPOINTMENT_REMINDER_LEADS and the tick picks it up.
+ */
+export enum AppointmentReminderLead {
+  THREE_DAYS = 'three_days',
+  ONE_HOUR = 'one_hour',
+  AT_TIME = 'at_time',
 }
 
 /**

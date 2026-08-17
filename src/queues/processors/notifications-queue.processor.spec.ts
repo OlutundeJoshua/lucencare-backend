@@ -3,9 +3,11 @@ import { Job } from 'bullmq';
 import { Test, TestingModule } from '@nestjs/testing';
 
 import {
+  APPOINTMENT_REMINDER_TICK_JOB,
   BATCH_NOTIFY_JOB,
   CONSENT_REVOKED_JOB,
   FAN_OUT_NOTIFY_JOB,
+  MEDICATION_MISSED_SWEEP_JOB,
   MEDICATION_REFILL_CHECK_JOB,
   MEDICATION_REMINDER_TICK_JOB,
   PROGRAM_APPROVED_JOB,
@@ -13,9 +15,11 @@ import {
 } from 'src/queues/queues.constants';
 
 import { NotificationsQueueProcessor } from './notifications-queue.processor';
+import { AppointmentReminderTickProcessor } from './appointment-reminder-tick.processor';
 import { BatchNotifyProcessor } from './batch-notify.processor';
 import { ConsentRevokedProcessor } from './consent-revoked.processor';
 import { FanOutNotifyProcessor } from './fan-out-notify.processor';
+import { MedicationMissedSweepProcessor } from './medication-missed-sweep.processor';
 import { MedicationRefillCheckProcessor } from './medication-refill-check.processor';
 import { MedicationReminderTickProcessor } from './medication-reminder-tick.processor';
 import { StudyApprovedProcessor } from './study-approved.processor';
@@ -28,6 +32,8 @@ describe('NotificationsQueueProcessor', () => {
   let studyApprovedProcessor: { process: jest.Mock };
   let medicationRefillCheckProcessor: { process: jest.Mock };
   let medicationReminderTickProcessor: { process: jest.Mock };
+  let medicationMissedSweepProcessor: { process: jest.Mock };
+  let appointmentReminderTickProcessor: { process: jest.Mock };
 
   beforeEach(async () => {
     fanOutNotifyProcessor = { process: jest.fn() };
@@ -36,6 +42,8 @@ describe('NotificationsQueueProcessor', () => {
     studyApprovedProcessor = { process: jest.fn() };
     medicationRefillCheckProcessor = { process: jest.fn() };
     medicationReminderTickProcessor = { process: jest.fn() };
+    medicationMissedSweepProcessor = { process: jest.fn() };
+    appointmentReminderTickProcessor = { process: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -46,6 +54,8 @@ describe('NotificationsQueueProcessor', () => {
         { provide: StudyApprovedProcessor, useValue: studyApprovedProcessor },
         { provide: MedicationRefillCheckProcessor, useValue: medicationRefillCheckProcessor },
         { provide: MedicationReminderTickProcessor, useValue: medicationReminderTickProcessor },
+        { provide: MedicationMissedSweepProcessor, useValue: medicationMissedSweepProcessor },
+        { provide: AppointmentReminderTickProcessor, useValue: appointmentReminderTickProcessor },
       ],
     }).compile();
 
@@ -103,6 +113,20 @@ describe('NotificationsQueueProcessor', () => {
     expect(medicationReminderTickProcessor.process).toHaveBeenCalledWith(job);
   });
 
+  // Enqueued on NOTIFICATIONS_QUEUE, so its switch arm has to live here — routed from
+  // another queue's processor it would match nothing and removeOnComplete would eat it.
+  it('routes medication_missed_sweep jobs to MedicationMissedSweepProcessor', async () => {
+    const job = { name: MEDICATION_MISSED_SWEEP_JOB, data: {} } as Job;
+    await processor.process(job);
+    expect(medicationMissedSweepProcessor.process).toHaveBeenCalledWith(job);
+  });
+
+  it('routes appointment_reminder_tick jobs to AppointmentReminderTickProcessor', async () => {
+    const job = { name: APPOINTMENT_REMINDER_TICK_JOB, data: {} } as Job;
+    await processor.process(job);
+    expect(appointmentReminderTickProcessor.process).toHaveBeenCalledWith(job);
+  });
+
   it('does nothing for an unrecognized job name', async () => {
     const job = { name: 'some_other_job', data: {} } as Job;
     await processor.process(job);
@@ -112,5 +136,7 @@ describe('NotificationsQueueProcessor', () => {
     expect(studyApprovedProcessor.process).not.toHaveBeenCalled();
     expect(medicationRefillCheckProcessor.process).not.toHaveBeenCalled();
     expect(medicationReminderTickProcessor.process).not.toHaveBeenCalled();
+    expect(medicationMissedSweepProcessor.process).not.toHaveBeenCalled();
+    expect(appointmentReminderTickProcessor.process).not.toHaveBeenCalled();
   });
 });

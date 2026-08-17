@@ -4,6 +4,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 
 import {
   APPLICATION_REVIEW_JOB,
+  COMMUNITY_REPORT_JOB,
   ORG_VERIFICATION_JOB,
   PROGRAM_APPROVED_JOB,
   PROGRAM_REJECTED_JOB,
@@ -13,6 +14,7 @@ import {
 
 import { AdminQueueProcessor } from './admin-queue.processor';
 import { ApplicationReviewProcessor } from './application-review.processor';
+import { CommunityReportProcessor } from './community-report.processor';
 import { OrgVerificationProcessor } from './org-verification.processor';
 import { ProgramOutcomeProcessor } from './program-outcome.processor';
 import { ProgramReviewProcessor } from './program-review.processor';
@@ -25,6 +27,7 @@ describe('AdminQueueProcessor', () => {
   let programReviewProcessor: { process: jest.Mock };
   let programOutcomeProcessor: { process: jest.Mock };
   let applicationReviewProcessor: { process: jest.Mock };
+  let communityReportProcessor: { process: jest.Mock };
 
   beforeEach(async () => {
     orgVerificationProcessor = { process: jest.fn() };
@@ -32,6 +35,7 @@ describe('AdminQueueProcessor', () => {
     programReviewProcessor = { process: jest.fn() };
     programOutcomeProcessor = { process: jest.fn() };
     applicationReviewProcessor = { process: jest.fn() };
+    communityReportProcessor = { process: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -41,6 +45,7 @@ describe('AdminQueueProcessor', () => {
         { provide: ProgramReviewProcessor, useValue: programReviewProcessor },
         { provide: ProgramOutcomeProcessor, useValue: programOutcomeProcessor },
         { provide: ApplicationReviewProcessor, useValue: applicationReviewProcessor },
+        { provide: CommunityReportProcessor, useValue: communityReportProcessor },
       ],
     }).compile();
 
@@ -93,6 +98,12 @@ describe('AdminQueueProcessor', () => {
     expect(applicationReviewProcessor.process).toHaveBeenCalledWith(job);
   });
 
+  it('routes community_report jobs to CommunityReportProcessor', async () => {
+    const job = { name: COMMUNITY_REPORT_JOB, data: {} } as Job;
+    await processor.process(job);
+    expect(communityReportProcessor.process).toHaveBeenCalledWith(job);
+  });
+
   it('does nothing for an unrecognized job name', async () => {
     const job = { name: 'some_other_job', data: {} } as Job;
     await processor.process(job);
@@ -100,5 +111,6 @@ describe('AdminQueueProcessor', () => {
     expect(studyReviewProcessor.process).not.toHaveBeenCalled();
     expect(programReviewProcessor.process).not.toHaveBeenCalled();
     expect(applicationReviewProcessor.process).not.toHaveBeenCalled();
+    expect(communityReportProcessor.process).not.toHaveBeenCalled();
   });
 });

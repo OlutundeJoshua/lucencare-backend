@@ -250,6 +250,52 @@ export class NotificationsService {
           body: `You are running low on ${s('medicationName', 'a medication')}.`,
         };
 
+      case NotificationType.COMMUNITY_POST_REPLY:
+        return {
+          title: 'New reply',
+          body: `${s('authorName', 'Someone')} replied to ${s('postTitle', 'your post')}.`,
+        };
+
+      case NotificationType.COMMUNITY_COMMENT_REPLY:
+        return {
+          title: 'New reply to your comment',
+          body: `${s('authorName', 'Someone')} replied to your comment on ${s('postTitle', 'a post')}.`,
+        };
+
+      case NotificationType.COMMUNITY_REACTION_MILESTONE: {
+        const count = typeof p['count'] === 'number' ? p['count'] : 0;
+        return {
+          title: 'Your post is helping people',
+          body: `${count} ${count === 1 ? 'person has' : 'people have'} marked ${s('postTitle', 'your contribution')} as helpful.`,
+        };
+      }
+
+      case NotificationType.COMMUNITY_CONTENT_HIDDEN: {
+        const reason = s('reason');
+        const what = s('targetType') === 'comment' ? 'comment' : 'post';
+        return {
+          title: `Your ${what} was removed`,
+          body: reason
+            ? `A moderator removed your ${what} from ${s('communityName', 'the community')}. Reason: ${reason}`
+            : `A moderator removed your ${what} from ${s('communityName', 'the community')}.`,
+        };
+      }
+
+      case NotificationType.COMMUNITY_REPORT_RESOLVED:
+        return {
+          title: 'Your report was reviewed',
+          body:
+            p['actioned'] === true
+              ? 'Thank you — a moderator agreed and the content has been removed.'
+              : 'A moderator reviewed the content you reported and left it in place.',
+        };
+
+      case NotificationType.COMMUNITY_CONTENT_REPORTED:
+        return {
+          title: 'Community content reported',
+          body: `A ${s('targetType', 'post')} in ${s('communityName', 'a community')} was reported for ${s('reason', 'review')}. It is waiting in the moderation queue.`,
+        };
+
       default:
         return { title: 'Notification', body: '' };
     }
@@ -274,6 +320,14 @@ export class NotificationsService {
       case NotificationType.HMO_LINK_REQUEST:
       case NotificationType.NEW_MESSAGE:
         return 'care';
+
+      case NotificationType.COMMUNITY_POST_REPLY:
+      case NotificationType.COMMUNITY_COMMENT_REPLY:
+      case NotificationType.COMMUNITY_REACTION_MILESTONE:
+      case NotificationType.COMMUNITY_CONTENT_HIDDEN:
+      case NotificationType.COMMUNITY_REPORT_RESOLVED:
+      case NotificationType.COMMUNITY_CONTENT_REPORTED:
+        return 'community';
 
       default:
         return 'system';

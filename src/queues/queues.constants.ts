@@ -20,8 +20,15 @@ export const SEND_RESET_PASSWORD_JOB = 'send_reset_password';
 export const SEND_PATIENT_CREDENTIALS_JOB = 'send_patient_credentials';
 export const MEDICATION_REMINDER_TICK_JOB = 'medication_reminder_tick';
 export const MEDICATION_REFILL_CHECK_JOB = 'medication_refill_check';
+// Persists MISSED on doses whose grace period elapsed unlogged. Unlike the other two
+// medication ticks it writes to medication_dose_logs rather than only reading them.
+export const MEDICATION_MISSED_SWEEP_JOB = 'medication_missed_sweep';
 export const SEND_MEDICATION_REMINDER_EMAIL_JOB = 'send_medication_reminder_email';
 export const SEND_APPOINTMENT_CONFIRMATION_JOB = 'send_appointment_confirmation';
+// Scans for appointments coming due and fans out reminder emails. Distinct from
+// SEND_APPOINTMENT_CONFIRMATION_JOB, which fires once at booking/reschedule time.
+export const APPOINTMENT_REMINDER_TICK_JOB = 'appointment_reminder_tick';
+export const SEND_APPOINTMENT_REMINDER_JOB = 'send_appointment_reminder';
 export const SEND_PATIENT_ONBOARDING_WELCOME_JOB = 'send_patient_onboarding_welcome';
 // Covers all three application lifecycle emails (received / approved / rejected) for
 // the four roles gated behind admin approval — see ApplicationEmailEvent.
@@ -32,6 +39,10 @@ export const SEND_ENROLLMENT_OUTCOME_JOB = 'send_enrollment_outcome';
 // Tells an NGO whether the platform approved the programme it submitted. The third
 // distinct outcome email: account (application), applicant (enrollment), programme.
 export const SEND_PROGRAM_STATUS_JOB = 'send_program_status';
+// A community post or comment was reported — tells the platform admins. The
+// community-shaped equivalent of PROGRAM_REVIEW_JOB. Enqueued on ADMIN_QUEUE, so
+// its switch arm belongs in AdminQueueProcessor and nowhere else.
+export const COMMUNITY_REPORT_JOB = 'community_report';
 
 export const NOTIFICATION_FAN_OUT_BATCH_SIZE = 200;
 export const MEDICATION_REFILL_CHECK_CRON = '0 7 * * *';

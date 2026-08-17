@@ -6,7 +6,7 @@ export default registerAs('app', () => ({
   apiPrefix: process.env.API_PREFIX ?? 'api',
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:3001',
   wsCorsOrigin: process.env.WS_CORS_ORIGIN ?? 'http://localhost:3001',
-  frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:3001',
+  frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:4200',
 
   redisHost: process.env.REDIS_HOST ?? 'localhost',
   redisPort: parseInt(process.env.REDIS_PORT ?? '6379', 10),
@@ -33,6 +33,32 @@ export default registerAs('app', () => ({
   medicationReminderTickCron: process.env.MEDICATION_REMINDER_TICK_CRON ?? '*/30 * * * *',
   medicationReminderWindowMinutes: parseInt(
     process.env.MEDICATION_REMINDER_WINDOW_MINUTES ?? '30',
+    10,
+  ),
+
+  // How long after its scheduled time a dose stays actionable before the sweep
+  // marks it MISSED. Both graces must exceed DUE_NOW_WINDOW_MINUTES (15) in
+  // medications.service.ts, or a dose would be marked missed while the schedule
+  // is still telling the patient to take it. LATER gets the longer window
+  // because the patient explicitly deferred that dose rather than ignoring it.
+  medicationDoseGraceMinutes: parseInt(process.env.MEDICATION_DOSE_GRACE_MINUTES ?? '60', 10),
+  medicationLaterDoseGraceMinutes: parseInt(
+    process.env.MEDICATION_LATER_DOSE_GRACE_MINUTES ?? '120',
+    10,
+  ),
+  // Not coupled to the graces — the sweep only ever marks doses already past
+  // grace, so a slower tick delays persistence without ever marking one early.
+  medicationMissedSweepCron: process.env.MEDICATION_MISSED_SWEEP_CRON ?? '*/15 * * * *',
+
+  // COUPLED PAIR — same rule as the medication reminder above, and for the same reason:
+  // each tick claims the appointments falling in the next `window` minutes at each lead,
+  // so window must EQUAL the tick interval. Smaller and appointments between two ticks
+  // are never reminded; larger and the same reminder goes out on more than one tick.
+  // 5 minutes rather than 30 because one of the leads is the appointment's own start
+  // time, where being up to half an hour early would be plainly wrong.
+  appointmentReminderTickCron: process.env.APPOINTMENT_REMINDER_TICK_CRON ?? '*/5 * * * *',
+  appointmentReminderWindowMinutes: parseInt(
+    process.env.APPOINTMENT_REMINDER_WINDOW_MINUTES ?? '5',
     10,
   ),
 

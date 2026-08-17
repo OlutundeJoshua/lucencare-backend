@@ -190,6 +190,67 @@ describe('NotificationsService', () => {
 
       expect(view.payload['programId']).toBe('01PROGRAM0000000000000001');
     });
+
+    // Every community type needs its own arm in BOTH switches. Without them they
+    // fall through to `default`, which renders { title: 'Notification', body: '' }
+    // in the 'system' bucket — wrong, and silent.
+    describe('community types', () => {
+      const COMMUNITY_TYPES = [
+        NotificationType.COMMUNITY_POST_REPLY,
+        NotificationType.COMMUNITY_COMMENT_REPLY,
+        NotificationType.COMMUNITY_REACTION_MILESTONE,
+        NotificationType.COMMUNITY_CONTENT_HIDDEN,
+        NotificationType.COMMUNITY_REPORT_RESOLVED,
+        NotificationType.COMMUNITY_CONTENT_REPORTED,
+      ];
+
+      it.each(COMMUNITY_TYPES)('%s renders real copy in the community category', async (type) => {
+        const view = await viewOf(type, {});
+
+        expect(view.title).not.toBe('Notification');
+        expect(view.title.length).toBeGreaterThan(0);
+        expect(view.body.length).toBeGreaterThan(0);
+        expect(view.category).toBe('community');
+      });
+
+      it('names the replier and the post on a reply', async () => {
+        const view = await viewOf(NotificationType.COMMUNITY_POST_REPLY, {
+          authorName: 'Dr Yemi Adekunle',
+          postTitle: 'Metformin side effects',
+        });
+
+        expect(view.body).toContain('Dr Yemi Adekunle');
+        expect(view.body).toContain('Metformin side effects');
+      });
+
+      // An author who is not told why cannot correct the behaviour.
+      it('gives the author the moderator’s reason when content is hidden', async () => {
+        const view = await viewOf(NotificationType.COMMUNITY_CONTENT_HIDDEN, {
+          targetType: 'comment',
+          communityName: 'Diabetes Support',
+          reason: 'Contains a phone number',
+        });
+
+        expect(view.title).toContain('comment');
+        expect(view.body).toContain('Contains a phone number');
+      });
+
+      it('tells a reporter whether their report was acted on', async () => {
+        const actioned = await viewOf(NotificationType.COMMUNITY_REPORT_RESOLVED, { actioned: true });
+        const dismissed = await viewOf(NotificationType.COMMUNITY_REPORT_RESOLVED, { actioned: false });
+
+        expect(actioned.body).toContain('removed');
+        expect(dismissed.body).toContain('left it in place');
+      });
+
+      it('pluralises the milestone count', async () => {
+        const one = await viewOf(NotificationType.COMMUNITY_REACTION_MILESTONE, { count: 1 });
+        const many = await viewOf(NotificationType.COMMUNITY_REACTION_MILESTONE, { count: 25 });
+
+        expect(one.body).toContain('1 person has');
+        expect(many.body).toContain('25 people have');
+      });
+    });
   });
 
   describe('markRead', () => {

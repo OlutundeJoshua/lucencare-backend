@@ -2,9 +2,11 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 
 import {
+  APPOINTMENT_REMINDER_TICK_JOB,
   BATCH_NOTIFY_JOB,
   CONSENT_REVOKED_JOB,
   FAN_OUT_NOTIFY_JOB,
+  MEDICATION_MISSED_SWEEP_JOB,
   MEDICATION_REFILL_CHECK_JOB,
   MEDICATION_REMINDER_TICK_JOB,
   NOTIFICATIONS_QUEUE,
@@ -12,9 +14,11 @@ import {
   WORKER_POLL_OPTIONS,
 } from 'src/queues/queues.constants';
 
+import { AppointmentReminderTickProcessor } from './appointment-reminder-tick.processor';
 import { BatchNotifyProcessor } from './batch-notify.processor';
 import { ConsentRevokedProcessor } from './consent-revoked.processor';
 import { FanOutNotifyProcessor } from './fan-out-notify.processor';
+import { MedicationMissedSweepProcessor } from './medication-missed-sweep.processor';
 import { MedicationRefillCheckProcessor } from './medication-refill-check.processor';
 import { MedicationReminderTickProcessor } from './medication-reminder-tick.processor';
 import { StudyApprovedProcessor } from './study-approved.processor';
@@ -31,6 +35,8 @@ export class NotificationsQueueProcessor extends WorkerHost {
     private readonly studyApprovedProcessor: StudyApprovedProcessor,
     private readonly medicationRefillCheckProcessor: MedicationRefillCheckProcessor,
     private readonly medicationReminderTickProcessor: MedicationReminderTickProcessor,
+    private readonly medicationMissedSweepProcessor: MedicationMissedSweepProcessor,
+    private readonly appointmentReminderTickProcessor: AppointmentReminderTickProcessor,
   ) {
     super();
   }
@@ -49,6 +55,10 @@ export class NotificationsQueueProcessor extends WorkerHost {
         return this.medicationRefillCheckProcessor.process(job);
       case MEDICATION_REMINDER_TICK_JOB:
         return this.medicationReminderTickProcessor.process(job);
+      case MEDICATION_MISSED_SWEEP_JOB:
+        return this.medicationMissedSweepProcessor.process(job);
+      case APPOINTMENT_REMINDER_TICK_JOB:
+        return this.appointmentReminderTickProcessor.process(job);
       default:
         return;
     }

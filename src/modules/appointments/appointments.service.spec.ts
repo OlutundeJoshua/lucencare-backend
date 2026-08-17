@@ -1,9 +1,15 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
 
-import { AppointmentConfirmationAction, AppointmentStatus, AppointmentType } from 'src/common/enums';
+import {
+  AppointmentConfirmationAction,
+  AppointmentReminderLead,
+  AppointmentStatus,
+  AppointmentType,
+} from 'src/common/enums';
 import { MAIL_JOB_OPTIONS, MAIL_QUEUE, SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
 import { PatientsService } from 'src/modules/patients/patients.service';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
@@ -44,8 +50,10 @@ describe('AppointmentsService', () => {
     count: jest.Mock;
     createQueryBuilder: jest.Mock;
   };
-  let userRepo: { findOne: jest.Mock };
+  let userRepo: { findOne: jest.Mock; find: jest.Mock };
+  let patientRepo: { find: jest.Mock };
   let patientsService: { getMyProfile: jest.Mock };
+  let configService: { get: jest.Mock };
   let mailQueue: { add: jest.Mock };
 
   beforeEach(async () => {
@@ -62,8 +70,16 @@ describe('AppointmentsService', () => {
         getCount: jest.fn().mockResolvedValue(0),
       })),
     };
-    userRepo = { findOne: jest.fn().mockResolvedValue(mockUser) };
+    userRepo = {
+      findOne: jest.fn().mockResolvedValue(mockUser),
+      find: jest.fn().mockResolvedValue([mockUser]),
+    };
+    patientRepo = { find: jest.fn().mockResolvedValue([mockPatient]) };
     patientsService = { getMyProfile: jest.fn().mockResolvedValue(mockPatient) };
+    // Matches the default tick cadence of */5. See the COUPLED PAIR note in app.config.ts.
+    configService = {
+      get: jest.fn((key: string) => (key === 'app.appointmentReminderWindowMinutes' ? 5 : undefined)),
+    };
     mailQueue = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -71,7 +87,9 @@ describe('AppointmentsService', () => {
         AppointmentsService,
         { provide: getRepositoryToken(Appointment), useValue: appointmentRepo },
         { provide: getRepositoryToken(User), useValue: userRepo },
+        { provide: getRepositoryToken(Patient), useValue: patientRepo },
         { provide: PatientsService, useValue: patientsService },
+        { provide: ConfigService, useValue: configService },
         { provide: getQueueToken(MAIL_QUEUE), useValue: mailQueue },
       ],
     }).compile();
@@ -212,6 +230,131 @@ describe('AppointmentsService', () => {
       expect(result).toEqual(
         expect.objectContaining({ upcoming: 0, thisMonth: 0, completed: 2, cancelled: 1 }),
       );
+    });
+  });
+
+  describe('findDueReminderTargets', () => {
+    /** The reminder scan reads through a query builder, not repo.find. */
+    function arrangeScan(appointments: unknown[]) {
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue(appointments),
+      };
+      appointmentRepo.createQueryBuilder.mockReturnValue(qb);
+      return qb;
+    }
+
+    /** Africa/Lagos is UTC+1, so 10:30 AM local is 09:30 UTC. */
+    const lagosPatient = { ...mockPatient, timezone: 'Africa/Lagos' };
+
+    beforeEach(() => {
+      patientRepo.find.mockResolvedValue([lagosPatient]);
+    });
+
+    it('sends the three-day reminder exactly three days out', async () => {
+      arrangeScan([mockAppointment]);
+
+      // 2026-07-29 10:30 local is 72h before the 2026-08-01 10:30 appointment.
+      const targets = await service.findDueReminderTargets(new Date('2026-07-29T09:30:00.000Z'));
+
+      expect(targets).toHaveLength(1);
+      expect(targets[0]).toEqual({
+        email: 'jane@example.com',
+        firstName: 'Jane',
+        lead: AppointmentReminderLead.THREE_DAYS,
+        appointmentType: AppointmentType.CONSULTATION,
+        appointmentDate: '2026-08-01',
+        time: '10:30 AM',
+        facility: 'Lucen Health Centre, Lagos',
+        provider: 'Dr. Sarah Chen',
+      });
+    });
+
+    it('sends the one-hour reminder an hour out', async () => {
+      arrangeScan([mockAppointment]);
+
+      const targets = await service.findDueReminderTargets(new Date('2026-08-01T08:30:00.000Z'));
+
+      expect(targets.map((t) => t.lead)).toEqual([AppointmentReminderLead.ONE_HOUR]);
+    });
+
+    it('sends the at-time reminder on the appointment itself', async () => {
+      arrangeScan([mockAppointment]);
+
+      const targets = await service.findDueReminderTargets(new Date('2026-08-01T09:30:00.000Z'));
+
+      expect(targets.map((t) => t.lead)).toEqual([AppointmentReminderLead.AT_TIME]);
+    });
+
+    // The window is half-open, so consecutive ticks must not both claim the same
+    // appointment for the same lead — that is one patient getting the email twice.
+    it('claims an appointment for a lead on exactly one tick', async () => {
+      arrangeScan([mockAppointment]);
+
+      const ticks = [
+        '2026-08-01T08:20:00.000Z',
+        '2026-08-01T08:25:00.000Z',
+        '2026-08-01T08:30:00.000Z',
+        '2026-08-01T08:35:00.000Z',
+        '2026-08-01T08:40:00.000Z',
+      ];
+
+      const oneHourHits: string[] = [];
+      for (const tick of ticks) {
+        const targets = await service.findDueReminderTargets(new Date(tick));
+        if (targets.some((t) => t.lead === AppointmentReminderLead.ONE_HOUR)) oneHourHits.push(tick);
+      }
+
+      expect(oneHourHits).toEqual(['2026-08-01T08:30:00.000Z']);
+    });
+
+    it('sends nothing at a time that matches no lead', async () => {
+      arrangeScan([mockAppointment]);
+
+      const targets = await service.findDueReminderTargets(new Date('2026-08-01T05:00:00.000Z'));
+
+      expect(targets).toEqual([]);
+    });
+
+    // Same rule the rest of the platform follows for free-form time strings: an
+    // unreadable label is skipped, never guessed at.
+    it('skips an appointment whose time label cannot be parsed', async () => {
+      arrangeScan([{ ...mockAppointment, time: 'sometime in the morning' }]);
+
+      const targets = await service.findDueReminderTargets(new Date('2026-08-01T09:30:00.000Z'));
+
+      expect(targets).toEqual([]);
+    });
+
+    it('anchors the window to the patient timezone, not to UTC', async () => {
+      patientRepo.find.mockResolvedValue([{ ...mockPatient, timezone: 'Asia/Kathmandu' }]);
+      arrangeScan([mockAppointment]);
+
+      // Kathmandu is UTC+5:45, a :45 offset that never lines up with a UTC-derived
+      // window. 10:30 local on 2026-08-01 is 04:45 UTC.
+      const targets = await service.findDueReminderTargets(new Date('2026-08-01T04:45:00.000Z'));
+
+      expect(targets.map((t) => t.lead)).toEqual([AppointmentReminderLead.AT_TIME]);
+    });
+
+    it('returns nothing when the scan finds no appointments', async () => {
+      arrangeScan([]);
+
+      const targets = await service.findDueReminderTargets(new Date('2026-08-01T09:30:00.000Z'));
+
+      expect(targets).toEqual([]);
+      expect(patientRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('excludes cancelled and completed appointments in the scan query', async () => {
+      const qb = arrangeScan([]);
+
+      await service.findDueReminderTargets(new Date('2026-08-01T09:30:00.000Z'));
+
+      expect(qb.where).toHaveBeenCalledWith('a.status IN (:...statuses)', {
+        statuses: [AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING],
+      });
     });
   });
 });

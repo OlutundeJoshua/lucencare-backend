@@ -18,7 +18,12 @@ const USER_ID = '01HZZZZZZZZZZZZZZZZZZZZZB1';
 const PATIENT_ID = '01HZZZZZZZZZZZZZZZZZZZZZB2';
 const MEDICATION_ID = '01HZZZZZZZZZZZZZZZZZZZZZB3';
 
-const mockPatient: Partial<Patient> = { id: PATIENT_ID, userId: USER_ID, timezone: 'Africa/Lagos' };
+const mockPatient: Partial<Patient> = {
+  id: PATIENT_ID,
+  userId: USER_ID,
+  name: 'Ada Lovelace',
+  timezone: 'Africa/Lagos',
+};
 
 const mockMedication: Partial<Medication> = {
   id: MEDICATION_ID,
@@ -51,6 +56,29 @@ function makeUpdateQueryBuilderMock() {
     set: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     execute: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+/** The candidate read in markOverdueDosesMissed. */
+function makeSelectQueryBuilderMock(rows: unknown[]) {
+  return {
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
+    take: jest.fn().mockReturnThis(),
+    getMany: jest.fn().mockResolvedValue(rows),
+  };
+}
+
+/** The bulk write in markOverdueDosesMissed — has andWhere and reports `affected`. */
+function makeSweepUpdateQueryBuilderMock(affected: number) {
+  return {
+    update: jest.fn().mockReturnThis(),
+    set: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    execute: jest.fn().mockResolvedValue({ affected }),
   };
 }
 
@@ -238,8 +266,8 @@ describe('MedicationsService', () => {
       expect(result.slots[0].doses[0].status).toBe(DoseStatus.DUE_NOW);
     });
 
-    it('leaves a PENDING dose alone when local time is outside the 15 minute window', async () => {
-      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T09:00:00.000Z')); // 10:00 AM in Africa/Lagos
+    it('reports a PENDING dose as pending only while it is still ahead', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T05:00:00.000Z')); // 6:00 AM in Africa/Lagos
 
       medicationRepo.find.mockResolvedValue([mockMedication]);
       doseLogRepo.find.mockResolvedValue([
@@ -256,6 +284,49 @@ describe('MedicationsService', () => {
       const result = await service.getSchedule(USER_ID);
 
       expect(result.slots[0].doses[0].status).toBe(DoseStatus.PENDING);
+    });
+
+    // The due-now window used to be symmetric (±15 min), so from 16 minutes late a
+    // dose fell back to plain PENDING and the frontend labelled a dose already in the
+    // past as "upcoming". PENDING now means "still ahead" and nothing else.
+    it('does not report a past-due dose as pending once its slot has passed', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T09:00:00.000Z')); // 10:00 AM in Africa/Lagos
+
+      medicationRepo.find.mockResolvedValue([mockMedication]);
+      doseLogRepo.find.mockResolvedValue([
+        {
+          id: 'log-1',
+          medicationId: MEDICATION_ID,
+          patientId: PATIENT_ID,
+          doseDate: '2026-07-22',
+          scheduledTime: '8:00 AM',
+          status: DoseStatus.PENDING,
+        },
+      ]);
+
+      const result = await service.getSchedule(USER_ID);
+
+      expect(result.slots[0].doses[0].status).toBe(DoseStatus.DUE_NOW);
+    });
+
+    it('returns a MISSED dose unchanged rather than overlaying due_now', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T07:05:00.000Z')); // 8:05 AM in Africa/Lagos
+
+      medicationRepo.find.mockResolvedValue([mockMedication]);
+      doseLogRepo.find.mockResolvedValue([
+        {
+          id: 'log-1',
+          medicationId: MEDICATION_ID,
+          patientId: PATIENT_ID,
+          doseDate: '2026-07-22',
+          scheduledTime: '8:00 AM',
+          status: DoseStatus.MISSED,
+        },
+      ]);
+
+      const result = await service.getSchedule(USER_ID);
+
+      expect(result.slots[0].doses[0].status).toBe(DoseStatus.MISSED);
     });
 
     it('does not overlay due_now onto a dose that is already TAKEN', async () => {
@@ -351,9 +422,51 @@ describe('MedicationsService', () => {
 
       const targets = await service.findDueReminderTargets(now);
 
+      // firstName and streakDays are carried on the target because the reminder copy
+      // quotes both — the mail processor has no repository access to look them up.
       expect(targets).toEqual([
-        { email: 'patient@example.com', medicationName: 'Metformin', dosage: '500 mg', scheduledTime: '8:00 AM' },
+        {
+          email: 'patient@example.com',
+          firstName: 'Ada',
+          medicationName: 'Metformin',
+          dosage: '500 mg',
+          scheduledTime: '8:00 AM',
+          streakDays: 0,
+        },
       ]);
+    });
+
+    // calcAdherenceStreak walks day by day, so resolving it per dose — or for a patient
+    // with nothing due — would multiply the query count for no added information.
+    it('computes the streak once per patient, not once per due dose', async () => {
+      patientRepo.find.mockResolvedValue([mockPatient]);
+      medicationRepo.find.mockResolvedValue([
+        { ...mockMedication, id: 'med-1', scheduleTimes: ['8:00 AM'] },
+        { ...mockMedication, id: 'med-2', name: 'Lisinopril', scheduleTimes: ['8:00 AM'] },
+      ]);
+      userRepo.find.mockResolvedValue([{ id: USER_ID, email: 'patient@example.com' }]);
+      doseLogRepo.count.mockResolvedValue(0);
+
+      const targets = await service.findDueReminderTargets(new Date('2026-07-17T07:00:00.000Z'));
+
+      expect(targets).toHaveLength(2);
+      expect(targets[0].streakDays).toBe(targets[1].streakDays);
+      // One streak computation costs 2 counts here — isDayFullyTaken short-circuits on
+      // a zero total, then the look-back loop breaks on the first empty day. Resolving
+      // it per dose instead of per patient would double that, and keep doubling as the
+      // patient adds medications.
+      expect(doseLogRepo.count).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not compute a streak at all when the patient has nothing due', async () => {
+      patientRepo.find.mockResolvedValue([mockPatient]);
+      medicationRepo.find.mockResolvedValue([{ ...mockMedication, scheduleTimes: ['11:00 PM'] }]);
+      userRepo.find.mockResolvedValue([{ id: USER_ID, email: 'patient@example.com' }]);
+
+      const targets = await service.findDueReminderTargets(new Date('2026-07-17T07:00:00.000Z'));
+
+      expect(targets).toEqual([]);
+      expect(doseLogRepo.count).not.toHaveBeenCalled();
     });
 
     it('returns nothing when no patients have reminders enabled', async () => {
@@ -483,6 +596,144 @@ describe('MedicationsService', () => {
 
       await service.getSchedule(USER_ID, '2026-07-21');
       expect(insertedRows().map((r) => r.scheduledTime)).toEqual(['8:00 AM', '8:00 PM']);
+    });
+
+    // Rows are created lazily, so a dose the patient never looked at is born hours
+    // after its slot and the sweep never saw it — it did not exist. Deciding the
+    // status at insert time is what stops a first read at 8 PM showing the 8 AM
+    // dose as upcoming until the next tick.
+    it('creates an already-elapsed dose as MISSED and a still-actionable one as PENDING', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T19:00:00.000Z')); // 8:00 PM in Africa/Lagos
+      medicationRepo.find.mockResolvedValue([mockMedication]);
+
+      await service.getSchedule(USER_ID);
+
+      expect(
+        (insertedRows() as Array<{ scheduledTime: string; status: DoseStatus }>).map((r) => [
+          r.scheduledTime,
+          r.status,
+        ]),
+      ).toEqual([
+        ['8:00 AM', DoseStatus.MISSED],
+        ['8:00 PM', DoseStatus.PENDING],
+      ]);
+
+      jest.useRealTimers();
+    });
+  });
+
+  describe('markOverdueDosesMissed', () => {
+    /** Africa/Lagos is UTC+1 — the same zone mockPatient carries. */
+    const LAGOS_PATIENT = { id: PATIENT_ID, userId: USER_ID, timezone: 'Africa/Lagos' };
+
+    function doseLog(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        id: 'log-1',
+        medicationId: MEDICATION_ID,
+        patientId: PATIENT_ID,
+        doseDate: '2026-07-22',
+        scheduledTime: '8:00 AM',
+        status: DoseStatus.PENDING,
+        ...overrides,
+      };
+    }
+
+    /** Wires the two query builders the sweep asks for, in the order it asks. */
+    function arrangeSweep(rows: unknown[], affected = rows.length) {
+      const selectQb = makeSelectQueryBuilderMock(rows);
+      const updateQb = makeSweepUpdateQueryBuilderMock(affected);
+      doseLogRepo.createQueryBuilder
+        .mockReturnValueOnce(selectQb)
+        .mockReturnValueOnce(updateQb);
+      patientRepo.find.mockResolvedValue([LAGOS_PATIENT]);
+      return { selectQb, updateQb };
+    }
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('marks a PENDING dose missed once the 60 minute grace has elapsed', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T08:30:00.000Z')); // 9:30 AM local — 90 min late
+      const { updateQb } = arrangeSweep([doseLog()]);
+
+      const marked = await service.markOverdueDosesMissed();
+
+      expect(marked).toBe(1);
+      expect(updateQb.set).toHaveBeenCalledWith({ status: DoseStatus.MISSED });
+      expect(updateQb.where).toHaveBeenCalledWith('id IN (:...ids)', { ids: ['log-1'] });
+    });
+
+    it('leaves a PENDING dose alone while it is still inside its grace', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T07:30:00.000Z')); // 8:30 AM local — 30 min late
+      const { updateQb } = arrangeSweep([doseLog()]);
+
+      expect(await service.markOverdueDosesMissed()).toBe(0);
+      expect(updateQb.execute).not.toHaveBeenCalled();
+    });
+
+    // A LATER dose was deferred deliberately, so it gets the longer grace.
+    it('leaves a LATER dose alone at 90 minutes but marks it missed past 120', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T08:30:00.000Z')); // 9:30 AM local — 90 min late
+      const early = arrangeSweep([doseLog({ status: DoseStatus.LATER })]);
+      expect(await service.markOverdueDosesMissed()).toBe(0);
+      expect(early.updateQb.execute).not.toHaveBeenCalled();
+
+      doseLogRepo.createQueryBuilder.mockReset();
+      jest.setSystemTime(new Date('2026-07-22T09:30:00.000Z')); // 10:30 AM local — 150 min late
+      const late = arrangeSweep([doseLog({ status: DoseStatus.LATER })]);
+      expect(await service.markOverdueDosesMissed()).toBe(1);
+      expect(late.updateQb.execute).toHaveBeenCalled();
+    });
+
+    // Same rule the rest of the service follows: an unreadable label is skipped, never
+    // treated as an error — and here, never as evidence the patient missed a dose.
+    it('never marks a dose whose time label cannot be parsed', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T20:00:00.000Z'));
+      const { updateQb } = arrangeSweep([doseLog({ scheduledTime: 'whenever' })]);
+
+      expect(await service.markOverdueDosesMissed()).toBe(0);
+      expect(updateQb.execute).not.toHaveBeenCalled();
+    });
+
+    // The day rolled over in the patient's zone but only 31 minutes have passed.
+    it('measures grace across midnight rather than treating yesterday as a full day late', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-22T23:30:00.000Z')); // 00:30 on the 23rd, local
+      const { updateQb } = arrangeSweep([doseLog({ scheduledTime: '11:59 PM' })]);
+
+      expect(await service.markOverdueDosesMissed()).toBe(0);
+      expect(updateQb.execute).not.toHaveBeenCalled();
+    });
+
+    it('returns 0 without touching the database when nothing is overdue', async () => {
+      arrangeSweep([]);
+
+      expect(await service.markOverdueDosesMissed()).toBe(0);
+      expect(patientRepo.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getStats', () => {
+    it('counts missed doses and stops a fully-missed day counting toward the streak', async () => {
+      medicationRepo.find.mockResolvedValue([mockMedication]);
+      doseLogRepo.count.mockImplementation(({ where }: { where: Record<string, any> }) => {
+        const status = where.status;
+        // No status filter — "how many doses did this day have at all".
+        if (!status) return Promise.resolve(1);
+        if (status === DoseStatus.MISSED) return Promise.resolve(1);
+        // The non-taken set inside isDayFullyTaken; MISSED has to be part of it or a
+        // day the patient missed entirely would read as a perfect day.
+        if (Array.isArray(status.value) && status.value.includes(DoseStatus.MISSED)) {
+          return Promise.resolve(1);
+        }
+        return Promise.resolve(0);
+      });
+
+      const stats = await service.getStats(USER_ID);
+
+      expect(stats.missedToday).toBe(1);
+      expect(stats.takenToday).toBe(0);
+      expect(stats.adherenceStreakDays).toBe(0);
     });
   });
 

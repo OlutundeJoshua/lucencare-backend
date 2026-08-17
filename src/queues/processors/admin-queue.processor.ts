@@ -4,6 +4,7 @@ import { Job } from 'bullmq';
 import {
   ADMIN_QUEUE,
   APPLICATION_REVIEW_JOB,
+  COMMUNITY_REPORT_JOB,
   ORG_VERIFICATION_JOB,
   PROGRAM_APPROVED_JOB,
   PROGRAM_REJECTED_JOB,
@@ -13,6 +14,7 @@ import {
 } from 'src/queues/queues.constants';
 
 import { ApplicationReviewProcessor } from './application-review.processor';
+import { CommunityReportProcessor } from './community-report.processor';
 import { OrgVerificationProcessor } from './org-verification.processor';
 import { ProgramOutcomeProcessor } from './program-outcome.processor';
 import { ProgramReviewProcessor } from './program-review.processor';
@@ -26,6 +28,7 @@ export class AdminQueueProcessor extends WorkerHost {
     private readonly programReviewProcessor: ProgramReviewProcessor,
     private readonly programOutcomeProcessor: ProgramOutcomeProcessor,
     private readonly applicationReviewProcessor: ApplicationReviewProcessor,
+    private readonly communityReportProcessor: CommunityReportProcessor,
   ) {
     super();
   }
@@ -45,6 +48,8 @@ export class AdminQueueProcessor extends WorkerHost {
         return this.programOutcomeProcessor.process(job);
       case APPLICATION_REVIEW_JOB:
         return this.applicationReviewProcessor.process(job);
+      case COMMUNITY_REPORT_JOB:
+        return this.communityReportProcessor.process(job);
       default:
         return;
     }

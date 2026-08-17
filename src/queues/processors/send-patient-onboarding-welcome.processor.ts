@@ -1,23 +1,49 @@
 import { Job } from 'bullmq';
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 import { SEND_PATIENT_ONBOARDING_WELCOME_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
+import { firstName } from 'src/common/utils/first-name.util';
 import { SendPatientOnboardingWelcomeJob } from 'src/queues/interfaces/send-patient-onboarding-welcome-job.interface';
 
 @Injectable()
 export class SendPatientOnboardingWelcomeProcessor {
-  constructor(private readonly mailService: MailService) {}
+  constructor(
+    private readonly mailService: MailService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async process(job: Job<SendPatientOnboardingWelcomeJob>): Promise<void> {
     if (job.name !== SEND_PATIENT_ONBOARDING_WELCOME_JOB) return;
 
     const { to, patientName } = job.data;
+    const name = firstName(patientName);
+    const dashboardUrl = `${this.configService.get<string>('app.frontendUrl')}/patient/dashboard`;
 
     await this.mailService.send(
       to,
-      'Welcome to LucenCare',
-      `Hi ${patientName},\n\nThank you for completing your LucenCare profile. Your account is now fully set up.\n\nYou can now:\n- Book appointments\n- Track your medications\n- Manage your care from your dashboard\n\nWe are glad to have you with us.\n\nThe LucenCare Team`,
+      `Welcome to LucenCare 💚, ${name}`,
+      [
+        `Hello ${name},`,
+        '',
+        "Welcome to LucenCare. We're really glad you're here.",
+        '',
+        "Whether you're managing a chronic condition yourself, or supporting someone you love through one, LucenCare is built to make the journey lighter. Here's what you can do right away:",
+        '',
+        '- Set up your medication reminders so nothing gets missed',
+        '- Book and track appointments in one place',
+        '- Join a community group for your condition to connect with people who get it',
+        '- Explore your health dashboard to see everything at a glance',
+        '',
+        `See your dashboard and manage your health here: ${dashboardUrl}`,
+        '',
+        'If you need support, our support team is available 24/7.',
+        '',
+        "Remember, you've got this — and now, you've got LucenCare on this journey.",
+        '',
+        'The LucenCare Team 💚',
+      ].join('\n'),
     );
   }
 }

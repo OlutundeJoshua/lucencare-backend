@@ -8,6 +8,14 @@ export default registerAs('app', () => ({
   wsCorsOrigin: process.env.WS_CORS_ORIGIN ?? 'http://localhost:3001',
   frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:4200',
 
+  // The refresh cookie can only travel on cross-SITE requests when it is
+  // SameSite=None; Secure; Partitioned. Set this to true wherever the API and the SPA
+  // sit on different registrable domains — e.g. the Render API answering a frontend on
+  // localhost or a preview URL. Leave it false when both share a site
+  // (api.lucencare.com + lucencare.com), where SameSite=Strict is sent normally and is
+  // the safer choice.
+  crossSiteCookies: (process.env.CROSS_SITE_COOKIES ?? 'false') === 'true',
+
   redisHost: process.env.REDIS_HOST ?? 'localhost',
   redisPort: parseInt(process.env.REDIS_PORT ?? '6379', 10),
   redisUsername: process.env.REDIS_USERNAME ?? 'default',

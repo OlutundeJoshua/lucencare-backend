@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { CookieOptions, Request, Response } from 'express';
 
 import {
   Body,
@@ -157,7 +157,7 @@ export class AuthController {
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const refreshToken = req.cookies?.[REFRESH_COOKIE] as string | undefined;
     await this.authService.logout(refreshToken);
-    res.clearCookie(REFRESH_COOKIE);
+    res.clearCookie(REFRESH_COOKIE, this.refreshCookieOptions());
     return { message: 'Logged out successfully' };
   }
 
@@ -290,10 +290,31 @@ export class AuthController {
 
   private setRefreshCookie(res: Response, token: string): void {
     res.cookie(REFRESH_COOKIE, token, {
-      httpOnly: true,
-      secure: this.configService.get<string>('app.nodeEnv') === 'production',
-      sameSite: 'strict',
+      ...this.refreshCookieOptions(),
       maxAge: REFRESH_COOKIE_MAX_AGE_MS,
     });
+  }
+
+  /**
+   * Shared by setRefreshCookie and the logout clear — a cookie is only cleared when the
+   * attributes on the clear match the ones it was set with, so the two must not drift.
+   *
+   * SameSite=Strict is never sent on a cross-site request, so with the SPA on a
+   * different registrable domain than the API the cookie exists in the browser and is
+   * withheld from every POST /auth/refresh, which then always 401s. Cross-site needs
+   * None + Secure (None is ignored on a non-Secure cookie) + Partitioned, without which
+   * Chrome drops it as an unpartitioned third-party cookie.
+   */
+  private refreshCookieOptions(): CookieOptions {
+    const crossSite = this.configService.get<boolean>('app.crossSiteCookies', false);
+    const isProd = this.configService.get<string>('app.nodeEnv') === 'production';
+
+    return {
+      httpOnly: true,
+      secure: crossSite || isProd,
+      sameSite: crossSite ? 'none' : 'strict',
+      ...(crossSite ? { partitioned: true } : {}),
+      path: '/',
+    };
   }
 }

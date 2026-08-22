@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
+import { assertJwtKeyPair } from './config/assert-jwt-key-pair';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -18,6 +19,11 @@ async function bootstrap() {
   app.useLogger(logger);
 
   const configService = app.get(ConfigService);
+
+  // Before the app accepts traffic: a mismatched RS256 pair lets login succeed and 401s
+  // every authenticated route, which is indistinguishable from a client sending no token.
+  assertJwtKeyPair(configService);
+
   const port = configService.get<number>('app.port', 3000);
   const apiPrefix = configService.get<string>('app.apiPrefix', 'api/v1');
 

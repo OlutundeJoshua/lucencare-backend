@@ -6,6 +6,7 @@ import { ClsModule } from 'nestjs-cls';
 import { LoggerModule } from 'nestjs-pino';
 import { ThrottlerStorageRedisService } from 'nestjs-throttler-storage-redis';
 
+import aiConfig from './config/ai.config';
 import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import jwtConfig from './config/jwt.config';
@@ -31,6 +32,7 @@ import { MessagesModule } from './modules/messages/messages.module';
 import { ExportModule } from './modules/export/export.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { AiModule } from './modules/ai/ai.module';
 import { ApplicationsModule } from './modules/applications/applications.module';
 import { QueuesModule } from './queues/queues.module';
 import { HealthModule } from './health/health.module';
@@ -39,7 +41,7 @@ import { HealthModule } from './health/health.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, databaseConfig, jwtConfig, mailConfig],
+      load: [aiConfig, appConfig, databaseConfig, jwtConfig, mailConfig],
       envFilePath: '.env',
     }),
 
@@ -113,6 +115,7 @@ import { HealthModule } from './health/health.module';
     ExportModule,
     AuditModule,
     AdminModule,
+    AiModule,
     ApplicationsModule,
     QueuesModule,
     HealthModule,

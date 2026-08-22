@@ -27,6 +27,7 @@
     "migration:run": "pnpm run typeorm -- migration:run -d src/database/data-source.ts",
     "migration:generate": "npx ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:generate -d src/database/data-source.ts",
     "migration:revert": "pnpm run typeorm -- migration:revert -d src/database/data-source.ts",
+    "migration:run:prod": "node ./node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js",
     "seed": "ts-node -r tsconfig-paths/register src/database/seeds/index.ts"
   },
   "dependencies": {
@@ -48,6 +49,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.5",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",

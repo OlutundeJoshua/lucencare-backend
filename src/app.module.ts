@@ -34,6 +34,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AiModule } from './modules/ai/ai.module';
 import { ApplicationsModule } from './modules/applications/applications.module';
+import { PublicModule } from './modules/public/public.module';
 import { QueuesModule } from './queues/queues.module';
 import { HealthModule } from './health/health.module';
 
@@ -117,6 +118,7 @@ import { HealthModule } from './health/health.module';
     AdminModule,
     AiModule,
     ApplicationsModule,
+    PublicModule,
     QueuesModule,
     HealthModule,
   ],

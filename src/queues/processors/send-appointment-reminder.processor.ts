@@ -4,6 +4,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { AppointmentReminderLead } from 'src/common/enums';
 import { SEND_APPOINTMENT_REMINDER_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
+import { EmailBlock } from 'src/common/interfaces/email-block.type';
 import { SendAppointmentReminderJob } from 'src/queues/interfaces/send-appointment-reminder-job.interface';
 
 /**
@@ -36,12 +37,16 @@ const APPOINTMENT_REMINDER_COPY: Record<
   },
 };
 
-const PREP_LIST = [
-  "Before you go, here's your 60-second prep list:",
-  '- Grab any recent test results or your med list',
-  '- Jot down that one question you keep forgetting to ask',
-  '',
-  "That's it. You're basically already prepped.",
+const PREP_BLOCKS: EmailBlock[] = [
+  {
+    kind: 'list',
+    lead: "Before you go, here's your 60-second prep list:",
+    items: [
+      'Grab any recent test results or your med list',
+      'Jot down that one question you keep forgetting to ask',
+    ],
+  },
+  { kind: 'paragraph', text: "That's it. You're basically already prepped." },
 ];
 
 @Injectable()
@@ -57,26 +62,26 @@ export class SendAppointmentReminderProcessor {
       const copy = APPOINTMENT_REMINDER_COPY[target.lead];
 
       try {
-        await this.mailService.send(
-          target.email,
-          copy.subject(target.firstName),
-          [
-            `Hey ${target.firstName},`,
-            '',
-            copy.opener,
-            '',
-            'Appointment details:',
-            `- Type: ${target.appointmentType}`,
-            `- Date: ${target.appointmentDate}`,
-            `- Time: ${target.time}`,
-            `- Location: ${target.facility}`,
-            `- With: ${target.provider}`,
-            '',
-            ...(copy.prep ? [...PREP_LIST, ''] : []),
-            "You've got this,",
-            'The LucenCare Team 💚',
-          ].join('\n'),
-        );
+        await this.mailService.send(target.email, copy.subject(target.firstName), {
+          preheader: `${copy.opener} ${target.appointmentDate} at ${target.time}.`,
+          blocks: [
+            { kind: 'paragraph', text: `Hey ${target.firstName},` },
+            { kind: 'callout', text: copy.opener },
+            {
+              kind: 'detailRows',
+              lead: 'Appointment details:',
+              rows: [
+                { label: 'Type', value: target.appointmentType },
+                { label: 'Date', value: target.appointmentDate },
+                { label: 'Time', value: target.time },
+                { label: 'Location', value: target.facility },
+                { label: 'With', value: target.provider },
+              ],
+            },
+            ...(copy.prep ? PREP_BLOCKS : []),
+            { kind: 'signoff', text: "You've got this,\nThe LucenCare Team 💚" },
+          ],
+        });
       } catch (err) {
         // Isolate per-target failures so one bad address or transient SMTP error does
         // not drop the reminders for the rest of this batch of up to 200 patients.

@@ -14,10 +14,19 @@ export class SendOtpProcessor {
 
     const { to, code, expiresInMinutes } = job.data;
 
-    await this.mailService.send(
-      to,
-      'Your LucenCare verification code',
-      `Hello,\n\nYour one-time verification code is ${code}.\n\nThis code expires in ${expiresInMinutes} minutes. If you did not request this code, you can safely ignore this email.\n\nThe LucenCare Team`,
-    );
+    await this.mailService.send(to, 'Your LucenCare verification code', {
+      // Deliberately excludes the code itself: the preheader surfaces on lock screens
+      // and in notification banners, where a one-time code should not.
+      preheader: `Your one-time verification code, valid for ${expiresInMinutes} minutes.`,
+      blocks: [
+        { kind: 'paragraph', text: 'Hello,' },
+        { kind: 'code', value: code, caption: 'Your one-time verification code is:' },
+        {
+          kind: 'paragraph',
+          text: `This code expires in ${expiresInMinutes} minutes. If you did not request this code, you can safely ignore this email.`,
+        },
+        { kind: 'signoff', text: 'The LucenCare Team' },
+      ],
+    });
   }
 }

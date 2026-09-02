@@ -57,3 +57,6 @@ coverage/
 # Lock files — commit pnpm-lock.yaml, ignore alternatives
 yarn.lock
 package-lock.json
+
+#temporary files
+tmp/

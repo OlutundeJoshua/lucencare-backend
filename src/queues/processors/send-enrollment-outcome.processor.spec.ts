@@ -6,6 +6,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { EnrollmentStatus } from 'src/common/enums';
 import { SEND_ENROLLMENT_OUTCOME_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
+import { renderEmailText } from 'src/modules/mail/email-text.util';
 
 import { SendEnrollmentOutcomeProcessor } from './send-enrollment-outcome.processor';
 
@@ -44,7 +45,10 @@ describe('SendEnrollmentOutcomeProcessor', () => {
     } as Job);
 
     expect(mailService.send).toHaveBeenCalledTimes(1);
-    return mailService.send.mock.calls[0] as [string, string, string];
+    const [to, subject, content] = mailService.send.mock.calls[0];
+    // The processor hands MailService a structured EmailContent; the copy
+    // assertions below are about its plain-text rendering.
+    return [to, subject, renderEmailText(content)];
   }
 
   it('should be defined', () => {

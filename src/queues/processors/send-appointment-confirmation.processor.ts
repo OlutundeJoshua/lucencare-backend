@@ -8,7 +8,10 @@ import { SendAppointmentConfirmationJob } from 'src/queues/interfaces/send-appoi
 
 // Add a new action to AppointmentConfirmationAction (src/common/enums) and a matching
 // entry here — no other branching logic needed.
-const APPOINTMENT_CONFIRMATION_COPY: Record<AppointmentConfirmationAction, { subject: string; verb: string }> = {
+const APPOINTMENT_CONFIRMATION_COPY: Record<
+  AppointmentConfirmationAction,
+  { subject: string; verb: string }
+> = {
   [AppointmentConfirmationAction.CREATED]: {
     subject: 'Your appointment is confirmed',
     verb: 'is confirmed for',
@@ -26,13 +29,26 @@ export class SendAppointmentConfirmationProcessor {
   async process(job: Job<SendAppointmentConfirmationJob>): Promise<void> {
     if (job.name !== SEND_APPOINTMENT_CONFIRMATION_JOB) return;
 
-    const { to, patientName, appointmentDate, time, provider, specialty, facility, action } = job.data;
+    const { to, patientName, appointmentDate, time, provider, specialty, facility, action } =
+      job.data;
     const { subject, verb } = APPOINTMENT_CONFIRMATION_COPY[action];
 
-    await this.mailService.send(
-      to,
-      subject,
-      `Hi ${patientName},\n\nYour ${specialty} appointment with ${provider} ${verb} ${appointmentDate} at ${time}, at ${facility}.\n\nIf you have any questions or need to make changes, please contact us.\n\nThe LucenCare Team`,
-    );
+    await this.mailService.send(to, subject, {
+      preheader: `${appointmentDate} at ${time}, ${facility}.`,
+      blocks: [
+        { kind: 'paragraph', text: `Hi ${patientName},` },
+        // The whole point of the email, so it gets the callout treatment rather than
+        // sitting in the flow of body copy.
+        {
+          kind: 'callout',
+          text: `Your ${specialty} appointment with ${provider} ${verb} ${appointmentDate} at ${time}, at ${facility}.`,
+        },
+        {
+          kind: 'paragraph',
+          text: 'If you have any questions or need to make changes, please contact us.',
+        },
+        { kind: 'signoff', text: 'The LucenCare Team' },
+      ],
+    });
   }
 }

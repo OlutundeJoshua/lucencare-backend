@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 
 import { SEND_PROGRAM_STATUS_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
+import { EmailBlock } from 'src/common/interfaces/email-block.type';
 import { SendProgramStatusJob } from 'src/queues/interfaces/send-program-status-job.interface';
 
 /**
@@ -37,16 +38,22 @@ export class SendProgramStatusProcessor {
     const copy = approved ? OUTCOME_COPY.approved : OUTCOME_COPY.rejected;
     const programsUrl = `${this.configService.get<string>('app.frontendUrl')}/ngo/programs`;
 
-    await this.mailService.send(
-      to,
-      copy.subject(programTitle),
-      `Hi ${recipientName},\n\n` +
-        `${copy.lead(programTitle)}\n\n` +
+    await this.mailService.send(to, copy.subject(programTitle), {
+      preheader: copy.lead(programTitle),
+      blocks: [
+        { kind: 'paragraph', text: `Hi ${recipientName},` },
+        { kind: 'callout', text: copy.lead(programTitle) },
         // Omitted entirely when absent — never "Reason: undefined".
-        (reason ? `Reason: ${reason}\n\n` : '') +
-        `${copy.next}\n\n` +
-        `View your programmes: ${programsUrl}\n\n` +
-        `The LucenCare Team`,
-    );
+        ...(reason ? [{ kind: 'paragraph', text: `Reason: ${reason}` } as EmailBlock] : []),
+        { kind: 'paragraph', text: copy.next },
+        {
+          kind: 'button',
+          label: 'View programmes',
+          url: programsUrl,
+          textLabel: 'View your programmes',
+        },
+        { kind: 'signoff', text: 'The LucenCare Team' },
+      ],
+    });
   }
 }

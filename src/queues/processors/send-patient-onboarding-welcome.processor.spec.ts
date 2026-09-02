@@ -5,6 +5,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 
 import { SEND_PATIENT_ONBOARDING_WELCOME_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
+import { renderEmailText } from 'src/modules/mail/email-text.util';
 
 import { SendPatientOnboardingWelcomeProcessor } from './send-patient-onboarding-welcome.processor';
 
@@ -25,12 +26,24 @@ describe('SendPatientOnboardingWelcomeProcessor', () => {
       ],
     }).compile();
 
-    processor = module.get<SendPatientOnboardingWelcomeProcessor>(SendPatientOnboardingWelcomeProcessor);
+    processor = module.get<SendPatientOnboardingWelcomeProcessor>(
+      SendPatientOnboardingWelcomeProcessor,
+    );
   });
 
   afterEach(() => {
     jest.clearAllMocks();
   });
+
+  /**
+   * The [to, subject, plain-text body] of the i-th email sent. The processor now hands
+   * MailService a structured EmailContent, so the body is rendered back to text here —
+   * which is what the copy assertions below are about.
+   */
+  const sent = (i = 0): [string, string, string] => {
+    const [to, subject, content] = mailService.send.mock.calls[i];
+    return [to, subject, renderEmailText(content)];
+  };
 
   it('should be defined', () => {
     expect(processor).toBeDefined();
@@ -46,7 +59,7 @@ describe('SendPatientOnboardingWelcomeProcessor', () => {
     await processor.process(job);
 
     expect(mailService.send).toHaveBeenCalledTimes(1);
-    const [to, subject, body] = mailService.send.mock.calls[0];
+    const [to, subject, body] = sent();
     expect(to).toBe('patient@example.com');
     expect(subject).toBe('Welcome to LucenCare 💚, Ada');
     expect(body).toContain('Hello Ada,');
@@ -61,7 +74,7 @@ describe('SendPatientOnboardingWelcomeProcessor', () => {
 
     await processor.process(job);
 
-    const [, , body] = mailService.send.mock.calls[0];
+    const [, , body] = sent();
     expect(body).toContain('https://app.lucencare.test/patient/dashboard');
   });
 
@@ -74,7 +87,7 @@ describe('SendPatientOnboardingWelcomeProcessor', () => {
 
     await processor.process(job);
 
-    const [, subject, body] = mailService.send.mock.calls[0];
+    const [, subject, body] = sent();
     expect(subject).toBe('Welcome to LucenCare 💚, Ada');
     expect(body).toContain('Hello Ada,');
   });

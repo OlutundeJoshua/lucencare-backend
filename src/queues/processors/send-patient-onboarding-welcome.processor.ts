@@ -21,29 +21,37 @@ export class SendPatientOnboardingWelcomeProcessor {
     const name = firstName(patientName);
     const dashboardUrl = `${this.configService.get<string>('app.frontendUrl')}/patient/dashboard`;
 
-    await this.mailService.send(
-      to,
-      `Welcome to LucenCare 💚, ${name}`,
-      [
-        `Hello ${name},`,
-        '',
-        "Welcome to LucenCare. We're really glad you're here.",
-        '',
-        "Whether you're managing a chronic condition yourself, or supporting someone you love through one, LucenCare is built to make the journey lighter. Here's what you can do right away:",
-        '',
-        '- Set up your medication reminders so nothing gets missed',
-        '- Book and track appointments in one place',
-        '- Join a community group for your condition to connect with people who get it',
-        '- Explore your health dashboard to see everything at a glance',
-        '',
-        `See your dashboard and manage your health here: ${dashboardUrl}`,
-        '',
-        'If you need support, our support team is available 24/7.',
-        '',
-        "Remember, you've got this — and now, you've got LucenCare on this journey.",
-        '',
-        'The LucenCare Team 💚',
-      ].join('\n'),
-    );
+    await this.mailService.send(to, `Welcome to LucenCare 💚, ${name}`, {
+      preheader: "Here's what you can do right away.",
+      blocks: [
+        { kind: 'paragraph', text: `Hello ${name},` },
+        { kind: 'paragraph', text: "Welcome to LucenCare. We're really glad you're here." },
+        {
+          kind: 'paragraph',
+          text: "Whether you're managing a chronic condition yourself, or supporting someone you love through one, LucenCare is built to make the journey lighter. Here's what you can do right away:",
+        },
+        {
+          kind: 'list',
+          items: [
+            'Set up your medication reminders so nothing gets missed',
+            'Book and track appointments in one place',
+            'Join a community group for your condition to connect with people who get it',
+            'Explore your health dashboard to see everything at a glance',
+          ],
+        },
+        {
+          kind: 'button',
+          label: 'Go to my dashboard',
+          url: dashboardUrl,
+          textLabel: 'See your dashboard and manage your health here',
+        },
+        { kind: 'paragraph', text: 'If you need support, our support team is available 24/7.' },
+        {
+          kind: 'paragraph',
+          text: "Remember, you've got this — and now, you've got LucenCare on this journey.",
+        },
+        { kind: 'signoff', text: 'The LucenCare Team 💚' },
+      ],
+    });
   }
 }

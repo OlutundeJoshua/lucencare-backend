@@ -6,6 +6,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ApplicantRole, ApplicationEmailEvent } from 'src/common/enums';
 import { SEND_APPLICATION_STATUS_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
+import { renderEmailText } from 'src/modules/mail/email-text.util';
 
 import { SendApplicationStatusProcessor } from './send-application-status.processor';
 
@@ -59,7 +60,10 @@ describe('SendApplicationStatusProcessor', () => {
     await processor.process(job);
 
     expect(mailService.send).toHaveBeenCalledTimes(1);
-    return mailService.send.mock.calls[0] as [string, string, string];
+    const [to, subject, content] = mailService.send.mock.calls[0];
+    // The processor hands MailService a structured EmailContent; the copy
+    // assertions below are about its plain-text rendering.
+    return [to, subject, renderEmailText(content)];
   }
 
   it('should be defined', () => {
@@ -143,9 +147,13 @@ describe('SendApplicationStatusProcessor', () => {
 
   describe('rejected', () => {
     it('includes the reason and what to do next', async () => {
-      const [, subject, body] = await run(ApplicantRole.BENEFACTOR, ApplicationEmailEvent.REJECTED, {
-        reason: 'Identity document was not legible',
-      });
+      const [, subject, body] = await run(
+        ApplicantRole.BENEFACTOR,
+        ApplicationEmailEvent.REJECTED,
+        {
+          reason: 'Identity document was not legible',
+        },
+      );
 
       expect(subject).toContain('was not approved');
       expect(body).toContain('Reason: Identity document was not legible');

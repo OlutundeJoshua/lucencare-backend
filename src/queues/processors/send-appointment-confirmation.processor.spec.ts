@@ -5,6 +5,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AppointmentConfirmationAction } from 'src/common/enums';
 import { SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
+import { renderEmailText } from 'src/modules/mail/email-text.util';
 
 import { SendAppointmentConfirmationProcessor } from './send-appointment-confirmation.processor';
 
@@ -26,15 +27,30 @@ describe('SendAppointmentConfirmationProcessor', () => {
     mailService = { send: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [SendAppointmentConfirmationProcessor, { provide: MailService, useValue: mailService }],
+      providers: [
+        SendAppointmentConfirmationProcessor,
+        { provide: MailService, useValue: mailService },
+      ],
     }).compile();
 
-    processor = module.get<SendAppointmentConfirmationProcessor>(SendAppointmentConfirmationProcessor);
+    processor = module.get<SendAppointmentConfirmationProcessor>(
+      SendAppointmentConfirmationProcessor,
+    );
   });
 
   afterEach(() => {
     jest.clearAllMocks();
   });
+
+  /**
+   * The [to, subject, plain-text body] of the i-th email sent. The processor now hands
+   * MailService a structured EmailContent, so the body is rendered back to text here —
+   * which is what the copy assertions below are about.
+   */
+  const sent = (i = 0): [string, string, string] => {
+    const [to, subject, content] = mailService.send.mock.calls[i];
+    return [to, subject, renderEmailText(content)];
+  };
 
   it('should be defined', () => {
     expect(processor).toBeDefined();
@@ -49,7 +65,7 @@ describe('SendAppointmentConfirmationProcessor', () => {
     await processor.process(job);
 
     expect(mailService.send).toHaveBeenCalledTimes(1);
-    const [to, subject, body] = mailService.send.mock.calls[0];
+    const [to, subject, body] = sent();
     expect(to).toBe('patient@example.com');
     expect(subject).toBe('Your appointment is confirmed');
     expect(body).toContain('is confirmed for');
@@ -65,7 +81,7 @@ describe('SendAppointmentConfirmationProcessor', () => {
     await processor.process(job);
 
     expect(mailService.send).toHaveBeenCalledTimes(1);
-    const [to, subject, body] = mailService.send.mock.calls[0];
+    const [to, subject, body] = sent();
     expect(to).toBe('patient@example.com');
     expect(subject).toBe('Your appointment has been rescheduled');
     expect(body).toContain('has been rescheduled to');

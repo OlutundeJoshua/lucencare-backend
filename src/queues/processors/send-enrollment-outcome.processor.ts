@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { EnrollmentStatus, ReviewableEnrollmentStatus } from 'src/common/enums';
 import { SEND_ENROLLMENT_OUTCOME_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
+import { EmailBlock } from 'src/common/interfaces/email-block.type';
 import { SendEnrollmentOutcomeJob } from 'src/queues/interfaces/send-enrollment-outcome-job.interface';
 
 /**
@@ -27,7 +28,8 @@ const OUTCOME_COPY: Record<
   },
   [EnrollmentStatus.REJECTED]: {
     subject: (p) => `Your application to ${p} was not successful`,
-    lead: (p) => `We have reviewed your application to ${p} and it was not successful on this occasion.`,
+    lead: (p) =>
+      `We have reviewed your application to ${p} and it was not successful on this occasion.`,
     // Mirrors the in-app rejected copy so the two channels agree.
     next: 'You are welcome to apply to other programmes on your Funding page, and to this one again if it reopens.',
   },
@@ -47,16 +49,22 @@ export class SendEnrollmentOutcomeProcessor {
     const copy = OUTCOME_COPY[status];
     const fundingUrl = `${this.configService.get<string>('app.frontendUrl')}/patient/funding/plans`;
 
-    await this.mailService.send(
-      to,
-      copy.subject(programTitle),
-      `Hi ${patientName},\n\n` +
-        `${copy.lead(programTitle)}\n\n` +
+    await this.mailService.send(to, copy.subject(programTitle), {
+      preheader: copy.lead(programTitle),
+      blocks: [
+        { kind: 'paragraph', text: `Hi ${patientName},` },
+        { kind: 'callout', text: copy.lead(programTitle) },
         // Omitted entirely when absent — never "Reason: undefined".
-        (reason ? `Reason: ${reason}\n\n` : '') +
-        `${copy.next}\n\n` +
-        `View your applications: ${fundingUrl}\n\n` +
-        `The LucenCare Team`,
-    );
+        ...(reason ? [{ kind: 'paragraph', text: `Reason: ${reason}` } as EmailBlock] : []),
+        { kind: 'paragraph', text: copy.next },
+        {
+          kind: 'button',
+          label: 'View applications',
+          url: fundingUrl,
+          textLabel: 'View your applications',
+        },
+        { kind: 'signoff', text: 'The LucenCare Team' },
+      ],
+    });
   }
 }

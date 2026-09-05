@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { In } from 'typeorm';
 
 import { AuditAction, DoseStatus, NotificationType } from 'src/common/enums';
 import { AuditService } from 'src/modules/audit/audit.service';
@@ -129,17 +130,22 @@ describe('MedicationsService', () => {
       count: jest.fn().mockResolvedValue(0),
       createQueryBuilder: jest.fn(() => makeInsertQueryBuilderMock()),
     };
-    patientRepo = { update: jest.fn().mockResolvedValue(undefined), find: jest.fn().mockResolvedValue([]) };
+    patientRepo = {
+      update: jest.fn().mockResolvedValue(undefined),
+      find: jest.fn().mockResolvedValue([]),
+    };
     userRepo = { find: jest.fn().mockResolvedValue([]) };
     patientsService = { getMyProfile: jest.fn().mockResolvedValue(mockPatient) };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     notificationsService = { createOne: jest.fn().mockResolvedValue(undefined) };
     // Matches the default tick cadence of */30. See the COUPLED PAIR note in app.config.ts.
-    configService = {
-      get: jest.fn((key: string) =>
-        key === 'app.medicationReminderWindowMinutes' ? 30 : undefined,
-      ),
+    // The window must match the tick interval, as in app.config.ts — with leads of 30
+    // and 0 minutes, a wider window would let one tick claim a dose for both at once.
+    const config: Record<string, unknown> = {
+      'app.medicationReminderWindowMinutes': 5,
+      'reminders.medicationLeads': [30, 0],
     };
+    configService = { get: jest.fn((key: string) => config[key]) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -164,7 +170,10 @@ describe('MedicationsService', () => {
       const result = await service.listMedications(USER_ID);
 
       expect(patientsService.getMyProfile).toHaveBeenCalledWith(USER_ID);
-      expect(medicationRepo.find).toHaveBeenCalledWith({ where: { patientId: PATIENT_ID }, order: { id: 'ASC' } });
+      expect(medicationRepo.find).toHaveBeenCalledWith({
+        where: { patientId: PATIENT_ID },
+        order: { id: 'ASC' },
+      });
       expect(result).toEqual([mockMedication]);
     });
   });
@@ -197,9 +206,9 @@ describe('MedicationsService', () => {
     it('throws NotFoundException when the medication does not belong to the caller', async () => {
       medicationRepo.findOne.mockResolvedValue(null);
 
-      await expect(service.updateMedication(USER_ID, MEDICATION_ID, { name: 'New name' })).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.updateMedication(USER_ID, MEDICATION_ID, { name: 'New name' }),
+      ).rejects.toThrow(NotFoundException);
     });
 
     it('soft-deletes an owned medication and re-syncs the patient summary', async () => {
@@ -220,7 +229,10 @@ describe('MedicationsService', () => {
       medicationRepo.findOne.mockResolvedValue(mockMedication);
       doseLogRepo.findOne.mockResolvedValue(null);
 
-      await service.logDose(USER_ID, MEDICATION_ID, { scheduledTime: '8:00 AM', status: DoseStatus.TAKEN });
+      await service.logDose(USER_ID, MEDICATION_ID, {
+        scheduledTime: '8:00 AM',
+        status: DoseStatus.TAKEN,
+      });
 
       const updateQb = medicationRepo.createQueryBuilder.mock.results[0].value;
       expect(updateQb.set).toHaveBeenCalledWith({ pillsRemaining: expect.any(Function) });
@@ -234,7 +246,10 @@ describe('MedicationsService', () => {
         status: DoseStatus.TAKEN,
       });
 
-      await service.logDose(USER_ID, MEDICATION_ID, { scheduledTime: '8:00 AM', status: DoseStatus.TAKEN });
+      await service.logDose(USER_ID, MEDICATION_ID, {
+        scheduledTime: '8:00 AM',
+        status: DoseStatus.TAKEN,
+      });
 
       expect(medicationRepo.createQueryBuilder).not.toHaveBeenCalled();
     });
@@ -354,7 +369,11 @@ describe('MedicationsService', () => {
     it('classifies medications by refill urgency and counts the rest as ok', async () => {
       const soon = new Date();
       soon.setDate(soon.getDate() + 3);
-      const urgentMed = { ...mockMedication, id: 'urgent-1', refillDate: soon.toISOString().slice(0, 10) };
+      const urgentMed = {
+        ...mockMedication,
+        id: 'urgent-1',
+        refillDate: soon.toISOString().slice(0, 10),
+      };
 
       const far = new Date();
       far.setDate(far.getDate() + 60);
@@ -392,7 +411,9 @@ describe('MedicationsService', () => {
 
     it('throws NotFoundException for a medication the caller does not own', async () => {
       medicationRepo.findOne.mockResolvedValue(null);
-      await expect(service.requestRefill(USER_ID, MEDICATION_ID)).rejects.toThrow(NotFoundException);
+      await expect(service.requestRefill(USER_ID, MEDICATION_ID)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -407,7 +428,10 @@ describe('MedicationsService', () => {
 
     it('disables reminders', async () => {
       await service.unregisterReminders(USER_ID);
-      expect(patientRepo.update).toHaveBeenCalledWith({ id: PATIENT_ID }, { medicationRemindersEnabled: false });
+      expect(patientRepo.update).toHaveBeenCalledWith(
+        { id: PATIENT_ID },
+        { medicationRemindersEnabled: false },
+      );
     });
   });
 
@@ -428,9 +452,9 @@ describe('MedicationsService', () => {
         {
           email: 'patient@example.com',
           firstName: 'Ada',
-          medicationName: 'Metformin',
-          dosage: '500 mg',
+          leadMinutes: 0,
           scheduledTime: '8:00 AM',
+          medications: [{ name: 'Metformin', dosage: '500 mg' }],
           streakDays: 0,
         },
       ]);
@@ -449,8 +473,10 @@ describe('MedicationsService', () => {
 
       const targets = await service.findDueReminderTargets(new Date('2026-07-17T07:00:00.000Z'));
 
-      expect(targets).toHaveLength(2);
-      expect(targets[0].streakDays).toBe(targets[1].streakDays);
+      // Grouped: two medications sharing 8:00 AM are one email, so there is one target
+      // and the streak on it was resolved once.
+      expect(targets).toHaveLength(1);
+      expect(targets[0].medications).toHaveLength(2);
       // One streak computation costs 2 counts here — isDayFullyTaken short-circuits on
       // a zero total, then the look-back loop breaks on the first empty day. Resolving
       // it per dose instead of per patient would double that, and keep doubling as the
@@ -491,52 +517,57 @@ describe('MedicationsService', () => {
         return new Date(Date.UTC(2026, 6, 17, h - 1, m, 0));
       }
 
-      it('reminds a 9:15 AM dose on the 9:00 tick', async () => {
+      it('reminds a 9:15 AM dose 30 minutes ahead, on the 8:45 tick', async () => {
         setup('9:15 AM');
-        const targets = await service.findDueReminderTargets(lagosTick('09:00'));
+        const targets = await service.findDueReminderTargets(lagosTick('08:45'));
         expect(targets).toHaveLength(1);
+        expect(targets[0].leadMinutes).toBe(30);
         expect(targets[0].scheduledTime).toBe('9:15 AM');
       });
 
-      // Exactly-once: the same dose must not also fire on the following tick.
-      it('does not remind the same 9:15 AM dose again on the 9:30 tick', async () => {
+      it('reminds the same dose again at its own moment, on the 9:15 tick', async () => {
         setup('9:15 AM');
-        const targets = await service.findDueReminderTargets(lagosTick('09:30'));
-        expect(targets).toEqual([]);
+        const targets = await service.findDueReminderTargets(lagosTick('09:15'));
+        expect(targets).toHaveLength(1);
+        expect(targets[0].leadMinutes).toBe(0);
       });
 
-      it('claims a dose exactly on the window boundary, and not the tick before', async () => {
-        setup('9:30 AM');
-        expect(await service.findDueReminderTargets(lagosTick('09:30'))).toHaveLength(1);
+      // Exactly-once per lead: neither lead may fire on a tick between the two.
+      it('sends nothing on a tick that matches no lead', async () => {
+        setup('9:15 AM');
         expect(await service.findDueReminderTargets(lagosTick('09:00'))).toEqual([]);
+        expect(await service.findDueReminderTargets(lagosTick('09:30'))).toEqual([]);
       });
 
-      // The property that matters: full-day coverage with no gaps and no repeats.
-      it('fires every dose exactly once across a full day of 30-minute ticks', async () => {
-        const times = ['12:05 AM', '6:45 AM', '9:15 AM', '1:59 PM', '8:00 PM', '11:30 PM'];
+      // The property that matters: full-day coverage with no gaps and no repeats —
+      // every dose fires exactly once per lead, and never twice for the same lead.
+      it('fires every dose exactly once per lead across a full day of 5-minute ticks', async () => {
+        const times = ['12:05 AM', '6:45 AM', '9:15 AM', '1:55 PM', '8:00 PM', '11:30 PM'];
         patientRepo.find.mockResolvedValue([mockPatient]);
         medicationRepo.find.mockResolvedValue([{ ...mockMedication, scheduleTimes: times }]);
         userRepo.find.mockResolvedValue([{ id: USER_ID, email: 'patient@example.com' }]);
 
         const fired: string[] = [];
-        for (let minutes = 0; minutes < 24 * 60; minutes += 30) {
+        for (let minutes = 0; minutes < 24 * 60; minutes += 5) {
           const tick = lagosTick(
             `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`,
           );
           const targets = await service.findDueReminderTargets(tick);
-          fired.push(...targets.map((t) => t.scheduledTime));
+          fired.push(...targets.map((t) => `${t.scheduledTime}|${t.leadMinutes}`));
         }
 
-        expect(fired.sort()).toEqual([...times].sort());
+        const expected = times.flatMap((t) => [`${t}|30`, `${t}|0`]);
+        expect(fired.sort()).toEqual(expected.sort());
       });
 
       // A 45-minute offset never aligns with the tick, which is why the window is
       // anchored to the patient's local time rather than to UTC.
       it('still reminds a patient in a :45-offset timezone', async () => {
         setup('9:15 AM', 'Asia/Kathmandu'); // UTC+5:45
-        // 09:00 Kathmandu == 03:15 UTC; window [09:00, 09:30) contains 09:15.
-        const targets = await service.findDueReminderTargets(new Date('2026-07-17T03:15:00.000Z'));
+        // 09:15 Kathmandu == 03:30 UTC, the dose's own moment.
+        const targets = await service.findDueReminderTargets(new Date('2026-07-17T03:30:00.000Z'));
         expect(targets).toHaveLength(1);
+        expect(targets[0].leadMinutes).toBe(0);
       });
 
       it('ignores a dose time it cannot parse instead of throwing', async () => {
@@ -544,18 +575,241 @@ describe('MedicationsService', () => {
         await expect(service.findDueReminderTargets(lagosTick('09:00'))).resolves.toEqual([]);
       });
 
+      describe('configured schedule', () => {
+        function withLeads(leads: number[]) {
+          (configService.get as jest.Mock).mockImplementation((key: string) =>
+            key === 'reminders.medicationLeads' ? leads : 5,
+          );
+        }
+
+        // Turning reminders off has to be possible without a deploy.
+        it('sends nothing at all when the schedule is empty', async () => {
+          setup('9:15 AM');
+          withLeads([]);
+
+          for (const tick of ['08:45', '09:15']) {
+            expect(await service.findDueReminderTargets(lagosTick(tick))).toEqual([]);
+          }
+        });
+
+        // The dose log is only worth reading if something might be sent.
+        it('does not touch the dose log when the schedule is empty', async () => {
+          setup('9:15 AM');
+          withLeads([]);
+
+          await service.findDueReminderTargets(lagosTick('09:15'));
+
+          expect(doseLogRepo.find).not.toHaveBeenCalled();
+        });
+
+        it('fires at a configured lead the defaults do not include', async () => {
+          setup('9:15 AM');
+          withLeads([120, 0]);
+
+          const targets = await service.findDueReminderTargets(lagosTick('07:15'));
+
+          expect(targets).toHaveLength(1);
+          expect(targets[0].leadMinutes).toBe(120);
+        });
+
+        it('stops firing at a lead removed from the schedule', async () => {
+          setup('9:15 AM');
+          withLeads([0]);
+
+          expect(await service.findDueReminderTargets(lagosTick('08:45'))).toEqual([]);
+          expect(await service.findDueReminderTargets(lagosTick('09:15'))).toHaveLength(1);
+        });
+      });
+
+      describe('grouping', () => {
+        /** Three medications for one patient, at the slots given. */
+        function setupMany(times: string[][]) {
+          patientRepo.find.mockResolvedValue([mockPatient]);
+          medicationRepo.find.mockResolvedValue(
+            times.map((scheduleTimes, i) => ({
+              ...mockMedication,
+              id: `med-${i}`,
+              name: `Drug${i}`,
+              dosage: `${i + 1}mg`,
+              scheduleTimes,
+            })),
+          );
+          userRepo.find.mockResolvedValue([{ id: USER_ID, email: 'patient@example.com' }]);
+        }
+
+        // The reason grouping exists: this used to be three separate emails, and with
+        // two leads it would have been six a day for one slot.
+        it('folds every medication in a slot into one target', async () => {
+          setupMany([['9:15 AM'], ['9:15 AM'], ['9:15 AM']]);
+
+          const targets = await service.findDueReminderTargets(lagosTick('09:15'));
+
+          expect(targets).toHaveLength(1);
+          expect(targets[0].medications).toEqual([
+            { name: 'Drug0', dosage: '1mg' },
+            { name: 'Drug1', dosage: '2mg' },
+            { name: 'Drug2', dosage: '3mg' },
+          ]);
+        });
+
+        it('keeps separate slots in separate targets', async () => {
+          setupMany([['9:15 AM'], ['9:20 AM']]);
+
+          const at915 = await service.findDueReminderTargets(lagosTick('09:15'));
+          const at920 = await service.findDueReminderTargets(lagosTick('09:20'));
+
+          expect(at915[0].medications).toEqual([{ name: 'Drug0', dosage: '1mg' }]);
+          expect(at920[0].medications).toEqual([{ name: 'Drug1', dosage: '2mg' }]);
+        });
+
+        // Two labels can name the same moment; the slot is keyed by the moment, so
+        // they share one email rather than producing two.
+        it('merges a weekday-prefixed label with a plain one at the same moment', async () => {
+          setupMany([['9:15 AM'], ['Friday · 9:15 AM']]); // 2026-07-17 is a Friday
+
+          const targets = await service.findDueReminderTargets(lagosTick('09:15'));
+
+          expect(targets).toHaveLength(1);
+          expect(targets[0].medications).toHaveLength(2);
+          expect(targets[0].scheduledTime).toBe('9:15 AM');
+        });
+      });
+
+      describe('already-resolved doses', () => {
+        function setupTwo() {
+          patientRepo.find.mockResolvedValue([mockPatient]);
+          medicationRepo.find.mockResolvedValue([
+            { ...mockMedication, id: 'med-taken', name: 'Taken', scheduleTimes: ['9:15 AM'] },
+            { ...mockMedication, id: 'med-open', name: 'Open', scheduleTimes: ['9:15 AM'] },
+          ]);
+          userRepo.find.mockResolvedValue([{ id: USER_ID, email: 'patient@example.com' }]);
+        }
+
+        // Telling someone to take a pill they took 20 minutes ago undermines the
+        // reminders and risks a double dose.
+        it.each([DoseStatus.TAKEN, DoseStatus.SKIPPED])(
+          'drops a dose already marked %s',
+          async (status) => {
+            setupTwo();
+            doseLogRepo.find.mockResolvedValue([
+              {
+                medicationId: 'med-taken',
+                doseDate: '2026-07-17',
+                scheduledTime: '9:15 AM',
+                status,
+              },
+            ]);
+
+            const targets = await service.findDueReminderTargets(lagosTick('09:15'));
+
+            expect(targets).toHaveLength(1);
+            expect(targets[0].medications).toEqual([{ name: 'Open', dosage: '500 mg' }]);
+          },
+        );
+
+        // A deferred dose still wants its reminder — that is what deferring means — and
+        // one with no log row at all has simply not been touched, since rows are
+        // written lazily. Both are excluded by the query rather than in JS, so this
+        // asserts the filter itself.
+        it('only treats TAKEN and SKIPPED as resolved', async () => {
+          setupTwo();
+
+          await service.findDueReminderTargets(lagosTick('09:15'));
+
+          expect(doseLogRepo.find).toHaveBeenCalledWith({
+            where: expect.objectContaining({
+              status: In([DoseStatus.TAKEN, DoseStatus.SKIPPED]),
+            }),
+          });
+        });
+
+        it('sends no email at all when every medication in the slot is resolved', async () => {
+          setupTwo();
+          doseLogRepo.find.mockResolvedValue([
+            {
+              medicationId: 'med-taken',
+              doseDate: '2026-07-17',
+              scheduledTime: '9:15 AM',
+              status: DoseStatus.TAKEN,
+            },
+            {
+              medicationId: 'med-open',
+              doseDate: '2026-07-17',
+              scheduledTime: '9:15 AM',
+              status: DoseStatus.TAKEN,
+            },
+          ]);
+
+          expect(await service.findDueReminderTargets(lagosTick('09:15'))).toEqual([]);
+        });
+
+        it('checks the dose log once for the whole tick, not once per dose', async () => {
+          setupTwo();
+
+          await service.findDueReminderTargets(lagosTick('09:15'));
+
+          expect(doseLogRepo.find).toHaveBeenCalledTimes(1);
+        });
+      });
+
+      // The 30-minute lead crosses midnight for an early dose. Without wrap-aware
+      // arithmetic this reminder could never fire at all.
+      describe('doses either side of midnight', () => {
+        it('reminds a 12:10 AM dose at 11:40 PM the evening before', async () => {
+          setup('12:10 AM');
+
+          const targets = await service.findDueReminderTargets(lagosTick('23:40'));
+
+          expect(targets).toHaveLength(1);
+          expect(targets[0].leadMinutes).toBe(30);
+          expect(targets[0].scheduledTime).toBe('12:10 AM');
+        });
+
+        it('reads the dose log against tomorrow for a wrapped reminder', async () => {
+          setup('12:10 AM');
+          // 2026-07-17 at 23:40 local, so the dose belongs to the 18th.
+          doseLogRepo.find.mockResolvedValue([
+            {
+              medicationId: MEDICATION_ID,
+              doseDate: '2026-07-18',
+              scheduledTime: '12:10 AM',
+              status: DoseStatus.TAKEN,
+            },
+          ]);
+
+          expect(await service.findDueReminderTargets(lagosTick('23:40'))).toEqual([]);
+        });
+
+        // The weekday must be tested against the day the dose lands on, not today.
+        it('reminds a Saturday dose from Friday evening', async () => {
+          setup('Saturday · 12:10 AM'); // 2026-07-17 is a Friday
+
+          const targets = await service.findDueReminderTargets(lagosTick('23:40'));
+
+          expect(targets).toHaveLength(1);
+        });
+
+        it('does not remind a Friday-only dose from Friday evening', async () => {
+          setup('Friday · 12:10 AM');
+
+          expect(await service.findDueReminderTargets(lagosTick('23:40'))).toEqual([]);
+        });
+      });
+
       describe('weekly doses', () => {
         // 2026-07-17 is a Friday.
         it('reminds on the named weekday', async () => {
           setup('Friday · 9:15 AM');
-          const targets = await service.findDueReminderTargets(lagosTick('09:00'));
+          const targets = await service.findDueReminderTargets(lagosTick('09:15'));
           expect(targets).toHaveLength(1);
-          expect(targets[0].scheduledTime).toBe('Friday · 9:15 AM');
+          // Normalised for display: the email arrives on the day in question, so the
+          // weekday prefix would be noise — and one slot can gather several labels.
+          expect(targets[0].scheduledTime).toBe('9:15 AM');
         });
 
         it('does not remind on any other weekday', async () => {
           setup('Monday · 9:15 AM');
-          const targets = await service.findDueReminderTargets(lagosTick('09:00'));
+          const targets = await service.findDueReminderTargets(lagosTick('09:15'));
           expect(targets).toEqual([]);
         });
       });
@@ -642,9 +896,7 @@ describe('MedicationsService', () => {
     function arrangeSweep(rows: unknown[], affected = rows.length) {
       const selectQb = makeSelectQueryBuilderMock(rows);
       const updateQb = makeSweepUpdateQueryBuilderMock(affected);
-      doseLogRepo.createQueryBuilder
-        .mockReturnValueOnce(selectQb)
-        .mockReturnValueOnce(updateQb);
+      doseLogRepo.createQueryBuilder.mockReturnValueOnce(selectQb).mockReturnValueOnce(updateQb);
       patientRepo.find.mockResolvedValue([LAGOS_PATIENT]);
       return { selectQb, updateQb };
     }
@@ -754,7 +1006,12 @@ describe('MedicationsService', () => {
 
       const result = await service.getSchedule(USER_ID, '2026-07-21');
 
-      expect(result.slots.map((s) => s.time)).toEqual(['8:00 AM', '9:15 AM', '2:00 PM', '10:00 PM']);
+      expect(result.slots.map((s) => s.time)).toEqual([
+        '8:00 AM',
+        '9:15 AM',
+        '2:00 PM',
+        '10:00 PM',
+      ]);
     });
 
     it('sorts an unparseable slot last rather than dropping it', async () => {

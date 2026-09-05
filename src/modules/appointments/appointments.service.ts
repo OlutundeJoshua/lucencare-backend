@@ -5,16 +5,19 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { In, Repository } from 'typeorm';
 import { Queue } from 'bullmq';
 
+import { AppointmentConfirmationAction, AppointmentStatus } from 'src/common/enums';
 import {
-  AppointmentConfirmationAction,
-  AppointmentReminderLead,
-  AppointmentStatus,
-} from 'src/common/enums';
-import { APPOINTMENT_REMINDER_LEAD_MINUTES } from 'src/common/constants/appointment-reminder-leads';
-import { MAIL_JOB_OPTIONS, MAIL_QUEUE, SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
+  MAIL_JOB_OPTIONS,
+  MAIL_QUEUE,
+  SEND_APPOINTMENT_CONFIRMATION_JOB,
+} from 'src/queues/queues.constants';
 import { SendAppointmentConfirmationJob } from 'src/queues/interfaces/send-appointment-confirmation-job.interface';
 import { firstName } from 'src/common/utils/first-name.util';
-import { minutesUntilScheduled, nowInTimezone } from 'src/common/utils/time-label.util';
+import {
+  MINUTES_PER_DAY,
+  minutesUntilScheduled,
+  nowInTimezone,
+} from 'src/common/utils/time-label.util';
 import { PatientsService } from 'src/modules/patients/patients.service';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { User } from 'src/modules/auth/entities/user.entity';
@@ -33,7 +36,11 @@ const DEFAULT_APPOINTMENT_REMINDER_WINDOW_MINUTES = 5;
  * longest lead so the three-day reminder is always in range, and bounded so the query
  * never widens into the patient's entire appointment history.
  */
-const REMINDER_SCAN_HORIZON_DAYS = 5;
+// A day of margin on top of the furthest configured lead, so no timezone can push an
+// appointment out of range. Derived rather than fixed: a hardcoded horizon shorter than
+// the furthest lead selects no rows for it, and that reminder silently never fires —
+// the failure looks identical to the feature simply not working.
+const REMINDER_SCAN_MARGIN_DAYS = 1;
 
 @Injectable()
 export class AppointmentsService {
@@ -87,7 +94,11 @@ export class AppointmentsService {
     return saved;
   }
 
-  async updateAppointment(userId: string, id: string, dto: UpdateAppointmentDto): Promise<Appointment> {
+  async updateAppointment(
+    userId: string,
+    id: string,
+    dto: UpdateAppointmentDto,
+  ): Promise<Appointment> {
     const appointment = await this.getOwnedAppointment(userId, id);
 
     const updates: Partial<Appointment> = {};
@@ -145,7 +156,10 @@ export class AppointmentsService {
       throw new ConflictException(`Appointment is already ${appointment.status}`);
     }
 
-    await this.appointmentRepo.update({ id: appointment.id }, { status: AppointmentStatus.CANCELLED });
+    await this.appointmentRepo.update(
+      { id: appointment.id },
+      { status: AppointmentStatus.CANCELLED },
+    );
 
     return this.getOwnedAppointmentForPatient(patient.id, id);
   }
@@ -208,7 +222,11 @@ export class AppointmentsService {
    * the tick interval; see the COUPLED PAIR note in app.config.ts.
    */
   async findDueReminderTargets(now: Date = new Date()): Promise<AppointmentReminderTarget[]> {
-    const horizon = new Date(now.getTime() + REMINDER_SCAN_HORIZON_DAYS * 86_400_000);
+    const leads = this.reminderLeads();
+    if (leads.length === 0) return [];
+
+    const horizonDays = Math.ceil(Math.max(...leads) / MINUTES_PER_DAY) + REMINDER_SCAN_MARGIN_DAYS;
+    const horizon = new Date(now.getTime() + horizonDays * 86_400_000);
 
     // Only appointments that are actually going to happen: a cancelled or completed
     // one must never generate a reminder, and status is re-read here rather than
@@ -239,9 +257,6 @@ export class AppointmentsService {
     const emailByUserId = new Map(users.map((u) => [u.id, u.email]));
 
     const windowMinutes = this.reminderWindowMinutes();
-    const leads = Object.entries(APPOINTMENT_REMINDER_LEAD_MINUTES) as Array<
-      [AppointmentReminderLead, number]
-    >;
 
     const targets: AppointmentReminderTarget[] = [];
     for (const appointment of appointments) {
@@ -257,12 +272,12 @@ export class AppointmentsService {
       // of the platform follows for free-form time strings.
       if (until === undefined) continue;
 
-      for (const [lead, leadMinutes] of leads) {
+      for (const leadMinutes of leads) {
         if (until >= leadMinutes && until < leadMinutes + windowMinutes) {
           targets.push({
             email,
             firstName: firstName(patient.name ?? ''),
-            lead,
+            leadMinutes,
             appointmentType: appointment.type,
             appointmentDate: appointment.appointmentDate,
             time: appointment.time,
@@ -274,6 +289,15 @@ export class AppointmentsService {
     }
 
     return targets;
+  }
+
+  /**
+   * The configured lead schedule (APPOINTMENT_REMINDER_LEADS), furthest first. An empty
+   * list means reminders are switched off, which the caller handles by simply matching
+   * nothing.
+   */
+  private reminderLeads(): number[] {
+    return this.configService.get<number[]>('reminders.appointmentLeads') ?? [];
   }
 
   /** See the COUPLED PAIR note in app.config.ts — must equal the tick interval. */

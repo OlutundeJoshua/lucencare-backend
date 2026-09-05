@@ -1,41 +1,57 @@
 import { Job } from 'bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 
-import { AppointmentReminderLead } from 'src/common/enums';
 import { SEND_APPOINTMENT_REMINDER_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
+import { formatLeadPhrase } from 'src/common/utils/lead-phrase.util';
 import { EmailBlock } from 'src/common/interfaces/email-block.type';
 import { SendAppointmentReminderJob } from 'src/queues/interfaces/send-appointment-reminder-job.interface';
 
+/** A lead of a day or more; the warmer, further-out voice is used from here up. */
+const DISTANT_LEAD_MINUTES = 24 * 60;
+
 /**
- * Per-lead copy. Add a lead to AppointmentReminderLead plus APPOINTMENT_REMINDER_LEAD_MINUTES
- * and an entry here — the Record makes a missing one a compile error rather than a
- * silently unsent email.
+ * The copy for a reminder, derived from how far ahead it is.
  *
- * `subject` takes the first name; `opener` is the line above the appointment details.
+ * Generated rather than written per lead because the schedule is configurable
+ * (APPOINTMENT_REMINDER_LEADS). Copy keyed to a lead's name would start lying the
+ * moment someone changed its value, and an email headed "in 1 hour" that arrives two
+ * hours early is worse than no reminder — the patient plans around it.
+ *
+ * Three voices, chosen by distance: the appointment's own moment, something imminent,
+ * and something far enough out to be a nudge rather than a prompt.
  */
-const APPOINTMENT_REMINDER_COPY: Record<
-  AppointmentReminderLead,
-  { subject: (name: string) => string; opener: string; prep: boolean }
-> = {
-  [AppointmentReminderLead.THREE_DAYS]: {
-    subject: (name) => `Psst, ${name} — you've got an appointment coming up!`,
-    opener: "You've got an appointment in 3 days.",
+function appointmentReminderCopy(leadMinutes: number): {
+  subject: (name: string) => string;
+  opener: string;
+  prep: boolean;
+} {
+  const phrase = formatLeadPhrase(leadMinutes);
+
+  if (leadMinutes <= 0) {
+    return {
+      subject: (name) => `${name}, it's appointment time`,
+      opener: 'Your appointment starts now.',
+      // No prep list at this point — there is no longer time to act on it, and a
+      // checklist arriving as someone walks in reads as pressure rather than help.
+      prep: false,
+    };
+  }
+
+  if (leadMinutes >= DISTANT_LEAD_MINUTES) {
+    return {
+      subject: (name) => `Psst, ${name} — you've got an appointment ${phrase}!`,
+      opener: `You've got an appointment ${phrase}.`,
+      prep: true,
+    };
+  }
+
+  return {
+    subject: (name) => `${name}, your appointment is ${phrase}`,
+    opener: `You've got an appointment ${phrase}.`,
     prep: true,
-  },
-  [AppointmentReminderLead.ONE_HOUR]: {
-    subject: (name) => `${name}, your appointment is in an hour`,
-    opener: "You've got an appointment in 1 hour.",
-    prep: true,
-  },
-  // No prep list at this point — there is no longer time to act on it, and a checklist
-  // arriving as someone walks in reads as pressure rather than help.
-  [AppointmentReminderLead.AT_TIME]: {
-    subject: (name) => `${name}, it's appointment time`,
-    opener: 'Your appointment starts now.',
-    prep: false,
-  },
-};
+  };
+}
 
 const PREP_BLOCKS: EmailBlock[] = [
   {
@@ -59,7 +75,18 @@ export class SendAppointmentReminderProcessor {
     if (job.name !== SEND_APPOINTMENT_REMINDER_JOB) return;
 
     for (const target of job.data.targets) {
-      const copy = APPOINTMENT_REMINDER_COPY[target.lead];
+      // A job enqueued just before the deploy that introduced leadMinutes carries the
+      // old named lead instead, leaving this undefined. Skip it rather than rendering
+      // "in NaN hours" — and one stale target must not fail the whole batch of up to
+      // 200 reminders behind it.
+      if (!Number.isFinite(target.leadMinutes)) {
+        this.logger.warn(
+          `Skipping appointment reminder with unreadable leadMinutes=${target.leadMinutes}`,
+        );
+        continue;
+      }
+
+      const copy = appointmentReminderCopy(target.leadMinutes);
 
       try {
         await this.mailService.send(target.email, copy.subject(target.firstName), {
@@ -86,7 +113,7 @@ export class SendAppointmentReminderProcessor {
         // Isolate per-target failures so one bad address or transient SMTP error does
         // not drop the reminders for the rest of this batch of up to 200 patients.
         this.logger.error(
-          `Failed to send appointment reminder to=${target.email} lead=${target.lead}: ${(err as Error).message}`,
+          `Failed to send appointment reminder to=${target.email} lead=${target.leadMinutes}: ${(err as Error).message}`,
         );
       }
     }

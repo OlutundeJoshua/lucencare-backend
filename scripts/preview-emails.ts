@@ -19,7 +19,6 @@ import {
   ApplicantRole,
   ApplicationEmailEvent,
   AppointmentConfirmationAction,
-  AppointmentReminderLead,
   EnrollmentStatus,
 } from 'src/common/enums';
 import {
@@ -200,15 +199,17 @@ async function collect(): Promise<void> {
     );
   }
 
-  for (const lead of Object.values(AppointmentReminderLead)) {
-    await capture(`reminder-appointment-${lead}`, () =>
+  // The three shapes the generated copy branches on: a day or more out, imminent,
+  // and the appointment's own moment.
+  for (const leadMinutes of [1440, 60, 0]) {
+    await capture(`reminder-appointment-${leadMinutes}min`, () =>
       new SendAppointmentReminderProcessor(mail).process(
         job(SEND_APPOINTMENT_REMINDER_JOB, {
           targets: [
             {
               email: 'ada@example.com',
               firstName: 'Ada',
-              lead,
+              leadMinutes,
               appointmentType: 'Endocrinology follow-up',
               appointmentDate: 'Tuesday, 15 September',
               time: '10:30',
@@ -221,23 +222,43 @@ async function collect(): Promise<void> {
     );
   }
 
-  for (const streakDays of [12, 0]) {
-    await capture(`reminder-medication-${streakDays > 0 ? 'streak' : 'no-streak'}`, () =>
-      new SendMedicationReminderEmailProcessor(mail, configService).process(
-        job(SEND_MEDICATION_REMINDER_EMAIL_JOB, {
-          targets: [
-            {
-              email: 'ada@example.com',
-              firstName: 'Ada',
-              medicationName: 'Metformin',
-              dosage: '500mg, one tablet',
-              scheduledTime: '08:00',
-              streakDays,
-            },
-          ],
-        }),
-      ),
-    );
+  // One medication and several, at both leads — the four shapes the copy branches on.
+  const MED_VARIANTS = [
+    {
+      slug: 'single',
+      medications: [{ name: 'Metformin', dosage: '500mg, one tablet' }],
+      streakDays: 12,
+    },
+    {
+      slug: 'multiple',
+      medications: [
+        { name: 'Metformin', dosage: '500mg, one tablet' },
+        { name: 'Lisinopril', dosage: '10mg, one tablet' },
+        { name: 'Atorvastatin', dosage: '20mg, one tablet' },
+      ],
+      streakDays: 0,
+    },
+  ];
+
+  for (const leadMinutes of [30, 0]) {
+    for (const variant of MED_VARIANTS) {
+      await capture(`reminder-medication-${leadMinutes}min-${variant.slug}`, () =>
+        new SendMedicationReminderEmailProcessor(mail, configService).process(
+          job(SEND_MEDICATION_REMINDER_EMAIL_JOB, {
+            targets: [
+              {
+                email: 'ada@example.com',
+                firstName: 'Ada',
+                leadMinutes,
+                scheduledTime: '8:00 AM',
+                medications: variant.medications,
+                streakDays: variant.streakDays,
+              },
+            ],
+          }),
+        ),
+      );
+    }
   }
 }
 

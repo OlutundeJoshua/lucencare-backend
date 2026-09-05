@@ -29,10 +29,4 @@ export const LOGIN_CLIENT_ROLES = Object.keys(CLIENT_ROLE_TO_USER_ROLE);
  * researchers are provisioned separately (researchers via the OTP flow), so
  * they must never be reachable from the public signup endpoint.
  */
-export const SIGNUP_CLIENT_ROLES = [
-  'patient',
-  'ngo',
-  'hmo',
-  'professional',
-  'benefactor',
-];
+export const SIGNUP_CLIENT_ROLES = ['patient', 'ngo', 'hmo', 'professional', 'benefactor'];

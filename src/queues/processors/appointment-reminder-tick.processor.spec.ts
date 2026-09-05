@@ -4,7 +4,6 @@ import { ConfigService } from '@nestjs/config';
 import { getQueueToken } from '@nestjs/bullmq';
 import { Test, TestingModule } from '@nestjs/testing';
 
-import { AppointmentReminderLead } from 'src/common/enums';
 import {
   APPOINTMENT_REMINDER_TICK_JOB,
   MAIL_QUEUE,
@@ -20,7 +19,7 @@ function target(i: number) {
   return {
     email: `p${i}@example.com`,
     firstName: 'Jane',
-    lead: AppointmentReminderLead.ONE_HOUR,
+    leadMinutes: 60,
     appointmentType: 'consultation',
     appointmentDate: '2026-08-01',
     time: '10:30 AM',
@@ -99,7 +98,9 @@ describe('AppointmentReminderTickProcessor', () => {
 
   // One job per patient at scale is what the batch size exists to prevent.
   it('splits a large fan-out into batches rather than one job per target', async () => {
-    const targets = Array.from({ length: NOTIFICATION_FAN_OUT_BATCH_SIZE + 5 }, (_, i) => target(i));
+    const targets = Array.from({ length: NOTIFICATION_FAN_OUT_BATCH_SIZE + 5 }, (_, i) =>
+      target(i),
+    );
     appointmentsService.findDueReminderTargets.mockResolvedValue(targets);
 
     await processor.process({ name: APPOINTMENT_REMINDER_TICK_JOB } as Job);

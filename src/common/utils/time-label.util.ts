@@ -104,3 +104,54 @@ export function minutesUntilScheduled(
 
   return dayDiff * MINUTES_PER_DAY + (parsed.minutes - local.minutes);
 }
+
+/** The ISO date `days` after `dateIso`, read at UTC midnight so no timezone shifts it. */
+export function addDaysToIsoDate(dateIso: string, days: number): string {
+  const at = new Date(`${dateIso}T00:00:00Z`);
+  at.setUTCDate(at.getUTCDate() + days);
+  return at.toISOString().slice(0, 10);
+}
+
+/**
+ * Renders minutes past midnight back as a 12-hour label — the inverse of
+ * `parseTimeLabel`, minus any weekday prefix.
+ *
+ * Grouped reminders need this: several doses can share a moment under different labels
+ * ('8:00 AM' and 'Monday · 8:00 AM'), and one email covering them all needs a single
+ * name for the slot. Dropping the weekday is deliberate — the email arrives on the day
+ * in question, so "Monday" in it would be noise.
+ */
+export function formatMinutesAsLabel(minutes: number): string {
+  const normalised = ((minutes % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+  const hour24 = Math.floor(normalised / 60);
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${hour12}:${String(normalised % 60).padStart(2, '0')} ${hour24 < 12 ? 'AM' : 'PM'}`;
+}
+
+/**
+ * When a recurring dose label next comes due, as minutes from now plus the calendar
+ * date it lands on.
+ *
+ * A dose is a time of day that repeats, not a dated instant, so "minutes until" has to
+ * wrap: at 23:40 a 00:10 dose is 30 minutes away, not 1410 minutes in the past. Without
+ * the wrap a lead that crosses midnight could never fire at all.
+ *
+ * The returned date is what the weekday check runs against, and it is why this returns
+ * the date rather than just a number. For 'Monday · 12:10 AM' read on Sunday at 23:40
+ * the occurrence belongs to Monday; testing the label against *today* would reject it
+ * and silently drop the reminder.
+ *
+ * Returns undefined when the label does not apply on the day it would next land.
+ */
+export function minutesUntilNextDailyOccurrence(
+  parsed: ParsedTimeLabel,
+  local: LocalClock,
+): { minutesUntil: number; dateIso: string } | undefined {
+  const sameDay = parsed.minutes >= local.minutes;
+  const minutesUntil = sameDay
+    ? parsed.minutes - local.minutes
+    : parsed.minutes - local.minutes + MINUTES_PER_DAY;
+  const dateIso = sameDay ? local.dateIso : addDaysToIsoDate(local.dateIso, 1);
+
+  return appliesOnDate(parsed, dateIso) ? { minutesUntil, dateIso } : undefined;
+}

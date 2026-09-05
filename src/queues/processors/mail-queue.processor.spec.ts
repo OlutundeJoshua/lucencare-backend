@@ -57,10 +57,19 @@ describe('MailQueueProcessor', () => {
         MailQueueProcessor,
         { provide: SendOtpProcessor, useValue: sendOtpProcessor },
         { provide: SendPatientCredentialsProcessor, useValue: sendPatientCredentialsProcessor },
-        { provide: SendMedicationReminderEmailProcessor, useValue: sendMedicationReminderEmailProcessor },
-        { provide: SendAppointmentConfirmationProcessor, useValue: sendAppointmentConfirmationProcessor },
+        {
+          provide: SendMedicationReminderEmailProcessor,
+          useValue: sendMedicationReminderEmailProcessor,
+        },
+        {
+          provide: SendAppointmentConfirmationProcessor,
+          useValue: sendAppointmentConfirmationProcessor,
+        },
         { provide: SendAppointmentReminderProcessor, useValue: sendAppointmentReminderProcessor },
-        { provide: SendPatientOnboardingWelcomeProcessor, useValue: sendPatientOnboardingWelcomeProcessor },
+        {
+          provide: SendPatientOnboardingWelcomeProcessor,
+          useValue: sendPatientOnboardingWelcomeProcessor,
+        },
         { provide: SendResetPasswordProcessor, useValue: sendResetPasswordProcessor },
         { provide: SendApplicationStatusProcessor, useValue: sendApplicationStatusProcessor },
         { provide: SendEnrollmentOutcomeProcessor, useValue: sendEnrollmentOutcomeProcessor },

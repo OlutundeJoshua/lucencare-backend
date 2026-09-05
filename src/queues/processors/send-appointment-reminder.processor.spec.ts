@@ -2,7 +2,6 @@ import { Job } from 'bullmq';
 
 import { Test, TestingModule } from '@nestjs/testing';
 
-import { AppointmentReminderLead } from 'src/common/enums';
 import { SEND_APPOINTMENT_REMINDER_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
 import { EmailContent } from 'src/common/interfaces/email-content.interface';
@@ -15,7 +14,7 @@ function target(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     email: 'jane@example.com',
     firstName: 'Jane',
-    lead: AppointmentReminderLead.THREE_DAYS,
+    leadMinutes: 1440,
     appointmentType: 'consultation',
     appointmentDate: '2026-08-01',
     time: '10:30 AM',
@@ -72,9 +71,9 @@ describe('SendAppointmentReminderProcessor', () => {
 
     const [to, subject, body] = sent();
     expect(to).toBe('jane@example.com');
-    expect(subject).toBe("Psst, Jane — you've got an appointment coming up!");
+    expect(subject).toBe("Psst, Jane — you've got an appointment tomorrow!");
     expect(body).toContain('Hey Jane,');
-    expect(body).toContain("You've got an appointment in 3 days.");
+    expect(body).toContain("You've got an appointment tomorrow.");
     expect(body).toContain('Type: consultation');
     expect(body).toContain('Date: 2026-08-01');
     expect(body).toContain('Time: 10:30 AM');
@@ -83,18 +82,32 @@ describe('SendAppointmentReminderProcessor', () => {
   });
 
   it('uses the one-hour copy for the one-hour lead', async () => {
-    await processor.process(jobFor([target({ lead: AppointmentReminderLead.ONE_HOUR })]));
+    await processor.process(jobFor([target({ leadMinutes: 60 })]));
 
     const [, subject, body] = sent();
-    expect(subject).toBe('Jane, your appointment is in an hour');
+    expect(subject).toBe('Jane, your appointment is in 1 hour');
     expect(body).toContain("You've got an appointment in 1 hour.");
     expect(body).toContain('60-second prep list');
+  });
+
+  // A job enqueued just before a deploy that changed the lead set carries a lead this
+  // build no longer knows. It must not take the rest of the batch down with it.
+  it('skips a target whose lead this build no longer knows, and sends the rest', async () => {
+    await processor.process(
+      jobFor([
+        target({ email: 'stale@example.com', leadMinutes: undefined }),
+        target({ email: 'jane@example.com' }),
+      ]),
+    );
+
+    expect(mailService.send).toHaveBeenCalledTimes(1);
+    expect(mailService.send.mock.calls[0][0]).toBe('jane@example.com');
   });
 
   // A prep checklist arriving as someone walks in reads as pressure, not help — there
   // is no longer time to act on it.
   it('drops the prep list on the at-time reminder', async () => {
-    await processor.process(jobFor([target({ lead: AppointmentReminderLead.AT_TIME })]));
+    await processor.process(jobFor([target({ leadMinutes: 0 })]));
 
     const [, subject, body] = sent();
     expect(subject).toBe("Jane, it's appointment time");

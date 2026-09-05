@@ -11,6 +11,7 @@ import appConfig from './config/app.config';
 import databaseConfig from './config/database.config';
 import jwtConfig from './config/jwt.config';
 import mailConfig from './config/mail.config';
+import remindersConfig from './config/reminders.config';
 
 import { CommonModule } from './common/common.module';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
@@ -42,7 +43,7 @@ import { HealthModule } from './health/health.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [aiConfig, appConfig, databaseConfig, jwtConfig, mailConfig],
+      load: [aiConfig, appConfig, databaseConfig, jwtConfig, mailConfig, remindersConfig],
       envFilePath: '.env',
     }),
 

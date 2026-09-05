@@ -6,11 +6,14 @@ import { getQueueToken } from '@nestjs/bullmq';
 
 import {
   AppointmentConfirmationAction,
-  AppointmentReminderLead,
   AppointmentStatus,
   AppointmentType,
 } from 'src/common/enums';
-import { MAIL_JOB_OPTIONS, MAIL_QUEUE, SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
+import {
+  MAIL_JOB_OPTIONS,
+  MAIL_QUEUE,
+  SEND_APPOINTMENT_CONFIRMATION_JOB,
+} from 'src/queues/queues.constants';
 import { PatientsService } from 'src/modules/patients/patients.service';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { User } from 'src/modules/auth/entities/user.entity';
@@ -77,9 +80,13 @@ describe('AppointmentsService', () => {
     patientRepo = { find: jest.fn().mockResolvedValue([mockPatient]) };
     patientsService = { getMyProfile: jest.fn().mockResolvedValue(mockPatient) };
     // Matches the default tick cadence of */5. See the COUPLED PAIR note in app.config.ts.
-    configService = {
-      get: jest.fn((key: string) => (key === 'app.appointmentReminderWindowMinutes' ? 5 : undefined)),
+    // Mirrors the shipped defaults: a day ahead, an hour ahead, and on time, matched
+    // against a window equal to the tick interval.
+    const config: Record<string, unknown> = {
+      'app.appointmentReminderWindowMinutes': 5,
+      'reminders.appointmentLeads': [1440, 60, 0],
     };
+    configService = { get: jest.fn((key: string) => config[key]) };
     mailQueue = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -164,7 +171,10 @@ describe('AppointmentsService', () => {
 
   describe('rescheduleAppointment', () => {
     it('resets status to CONFIRMED and re-sends the confirmation email', async () => {
-      appointmentRepo.findOne.mockResolvedValue({ ...mockAppointment, status: AppointmentStatus.PENDING });
+      appointmentRepo.findOne.mockResolvedValue({
+        ...mockAppointment,
+        status: AppointmentStatus.PENDING,
+      });
 
       await service.rescheduleAppointment(USER_ID, APPOINTMENT_ID, {
         appointmentDate: '2026-08-10',
@@ -174,7 +184,10 @@ describe('AppointmentsService', () => {
 
       expect(appointmentRepo.update).toHaveBeenCalledWith(
         { id: APPOINTMENT_ID },
-        expect.objectContaining({ status: AppointmentStatus.CONFIRMED, appointmentDate: '2026-08-10' }),
+        expect.objectContaining({
+          status: AppointmentStatus.CONFIRMED,
+          appointmentDate: '2026-08-10',
+        }),
       );
       expect(mailQueue.add).toHaveBeenCalledWith(
         SEND_APPOINTMENT_CONFIRMATION_JOB,
@@ -184,7 +197,10 @@ describe('AppointmentsService', () => {
     });
 
     it('throws ConflictException when the appointment is already cancelled', async () => {
-      appointmentRepo.findOne.mockResolvedValue({ ...mockAppointment, status: AppointmentStatus.CANCELLED });
+      appointmentRepo.findOne.mockResolvedValue({
+        ...mockAppointment,
+        status: AppointmentStatus.CANCELLED,
+      });
 
       await expect(
         service.rescheduleAppointment(USER_ID, APPOINTMENT_ID, {
@@ -209,15 +225,22 @@ describe('AppointmentsService', () => {
     });
 
     it('throws ConflictException when already completed', async () => {
-      appointmentRepo.findOne.mockResolvedValue({ ...mockAppointment, status: AppointmentStatus.COMPLETED });
+      appointmentRepo.findOne.mockResolvedValue({
+        ...mockAppointment,
+        status: AppointmentStatus.COMPLETED,
+      });
 
-      await expect(service.cancelAppointment(USER_ID, APPOINTMENT_ID)).rejects.toThrow(ConflictException);
+      await expect(service.cancelAppointment(USER_ID, APPOINTMENT_ID)).rejects.toThrow(
+        ConflictException,
+      );
     });
 
     it('throws NotFoundException when the appointment does not belong to the caller', async () => {
       appointmentRepo.findOne.mockResolvedValue(null);
 
-      await expect(service.cancelAppointment(USER_ID, APPOINTMENT_ID)).rejects.toThrow(NotFoundException);
+      await expect(service.cancelAppointment(USER_ID, APPOINTMENT_ID)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -252,17 +275,17 @@ describe('AppointmentsService', () => {
       patientRepo.find.mockResolvedValue([lagosPatient]);
     });
 
-    it('sends the three-day reminder exactly three days out', async () => {
+    it('sends the one-day reminder exactly a day out', async () => {
       arrangeScan([mockAppointment]);
 
-      // 2026-07-29 10:30 local is 72h before the 2026-08-01 10:30 appointment.
-      const targets = await service.findDueReminderTargets(new Date('2026-07-29T09:30:00.000Z'));
+      // 2026-07-31 10:30 local is 24h before the 2026-08-01 10:30 appointment.
+      const targets = await service.findDueReminderTargets(new Date('2026-07-31T09:30:00.000Z'));
 
       expect(targets).toHaveLength(1);
       expect(targets[0]).toEqual({
         email: 'jane@example.com',
         firstName: 'Jane',
-        lead: AppointmentReminderLead.THREE_DAYS,
+        leadMinutes: 1440,
         appointmentType: AppointmentType.CONSULTATION,
         appointmentDate: '2026-08-01',
         time: '10:30 AM',
@@ -276,7 +299,7 @@ describe('AppointmentsService', () => {
 
       const targets = await service.findDueReminderTargets(new Date('2026-08-01T08:30:00.000Z'));
 
-      expect(targets.map((t) => t.lead)).toEqual([AppointmentReminderLead.ONE_HOUR]);
+      expect(targets.map((t) => t.leadMinutes)).toEqual([60]);
     });
 
     it('sends the at-time reminder on the appointment itself', async () => {
@@ -284,7 +307,7 @@ describe('AppointmentsService', () => {
 
       const targets = await service.findDueReminderTargets(new Date('2026-08-01T09:30:00.000Z'));
 
-      expect(targets.map((t) => t.lead)).toEqual([AppointmentReminderLead.AT_TIME]);
+      expect(targets.map((t) => t.leadMinutes)).toEqual([0]);
     });
 
     // The window is half-open, so consecutive ticks must not both claim the same
@@ -303,10 +326,73 @@ describe('AppointmentsService', () => {
       const oneHourHits: string[] = [];
       for (const tick of ticks) {
         const targets = await service.findDueReminderTargets(new Date(tick));
-        if (targets.some((t) => t.lead === AppointmentReminderLead.ONE_HOUR)) oneHourHits.push(tick);
+        if (targets.some((t) => t.leadMinutes === 60)) {
+          oneHourHits.push(tick);
+        }
       }
 
       expect(oneHourHits).toEqual(['2026-08-01T08:30:00.000Z']);
+    });
+
+    describe('configured schedule', () => {
+      /** Re-point the mocked config at a different lead schedule. */
+      function withLeads(leads: number[]) {
+        (configService.get as jest.Mock).mockImplementation((key: string) =>
+          key === 'reminders.appointmentLeads' ? leads : 5,
+        );
+      }
+
+      // Turning reminders off has to be possible without a deploy.
+      it('sends nothing at all when the schedule is empty', async () => {
+        arrangeScan([mockAppointment]);
+        withLeads([]);
+
+        for (const tick of [
+          '2026-07-31T09:30:00.000Z',
+          '2026-08-01T08:30:00.000Z',
+          '2026-08-01T09:30:00.000Z',
+        ]) {
+          expect(await service.findDueReminderTargets(new Date(tick))).toEqual([]);
+        }
+      });
+
+      it('fires at a configured lead the defaults do not include', async () => {
+        arrangeScan([mockAppointment]);
+        withLeads([120]);
+
+        // 08:30 local is two hours before the 10:30 appointment.
+        const targets = await service.findDueReminderTargets(new Date('2026-08-01T07:30:00.000Z'));
+
+        expect(targets.map((t) => t.leadMinutes)).toEqual([120]);
+      });
+
+      it('stops firing at a lead removed from the schedule', async () => {
+        arrangeScan([mockAppointment]);
+        withLeads([1440, 0]);
+
+        // The hour-ahead tick, which the default schedule would have claimed.
+        expect(await service.findDueReminderTargets(new Date('2026-08-01T08:30:00.000Z'))).toEqual(
+          [],
+        );
+      });
+
+      // A horizon shorter than the furthest lead selects no rows for it, and that
+      // reminder silently never fires — the failure looks exactly like the feature
+      // not working, so the horizon is derived rather than fixed.
+      it('widens the scan horizon to cover the furthest configured lead', async () => {
+        arrangeScan([mockAppointment]);
+        withLeads([3 * 24 * 60, 0]);
+
+        await service.findDueReminderTargets(new Date('2026-07-29T09:30:00.000Z'));
+
+        const range = appointmentRepo.createQueryBuilder.mock.results
+          .map((r) => r.value)
+          .flatMap((qb) => qb.andWhere.mock.calls)
+          .find((call: unknown[]) => String(call[0]).includes('appointment_date BETWEEN'));
+
+        // Three days of lead plus a day of margin.
+        expect(range?.[1]).toMatchObject({ to: '2026-08-02' });
+      });
     });
 
     it('sends nothing at a time that matches no lead', async () => {
@@ -335,7 +421,7 @@ describe('AppointmentsService', () => {
       // window. 10:30 local on 2026-08-01 is 04:45 UTC.
       const targets = await service.findDueReminderTargets(new Date('2026-08-01T04:45:00.000Z'));
 
-      expect(targets.map((t) => t.lead)).toEqual([AppointmentReminderLead.AT_TIME]);
+      expect(targets.map((t) => t.leadMinutes)).toEqual([0]);
     });
 
     it('returns nothing when the scan finds no appointments', async () => {

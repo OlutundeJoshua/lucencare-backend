@@ -4,7 +4,6 @@ import { ConfigService } from '@nestjs/config';
 import { getQueueToken } from '@nestjs/bullmq';
 import { Test, TestingModule } from '@nestjs/testing';
 
-import { AppointmentReminderLead } from 'src/common/enums';
 import {
   APPOINTMENT_REMINDER_TICK_JOB,
   MAIL_QUEUE,
@@ -20,7 +19,7 @@ function target(i: number) {
   return {
     email: `p${i}@example.com`,
     firstName: 'Jane',
-    lead: AppointmentReminderLead.ONE_HOUR,
+    leadMinutes: 60,
     appointmentType: 'consultation',
     appointmentDate: '2026-08-01',
     time: '10:30 AM',

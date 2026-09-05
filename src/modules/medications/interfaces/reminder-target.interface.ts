@@ -1,5 +1,3 @@
-import { MedicationReminderLead } from 'src/common/enums';
-
 import { ReminderMedication } from './reminder-medication.interface';
 
 /**
@@ -11,8 +9,12 @@ export interface ReminderTarget {
   email: string;
   /** Greeting name, already reduced to the patient's first name by the service. */
   firstName: string;
-  /** Which of the scheduled reminders this is — it picks the copy. */
-  lead: MedicationReminderLead;
+  /**
+   * How far ahead of the dose this reminder is, in minutes — 0 is the dose's own
+   * moment. Carries the configured value rather than a named lead so the copy can be
+   * generated from it and can never disagree with when the email arrives.
+   */
+  leadMinutes: number;
   /**
    * The slot, normalised for display ('8:00 AM'). Several labels can name the same
    * moment ('8:00 AM' and 'Monday · 8:00 AM'), and they share one email.

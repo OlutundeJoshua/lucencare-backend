@@ -332,28 +332,6 @@ export enum AppointmentConfirmationAction {
 }
 
 /**
- * How far ahead of an appointment a reminder goes out. Each member is one email a
- * patient receives for the same appointment, so the set doubles as the send schedule:
- * add a member plus its entry in APPOINTMENT_REMINDER_LEADS and the tick picks it up.
- */
-export enum AppointmentReminderLead {
-  ONE_DAY = 'one_day',
-  ONE_HOUR = 'one_hour',
-  AT_TIME = 'at_time',
-}
-
-/**
- * The same idea for a medication dose: one member per email the patient receives for
- * the same dose. Deliberately a separate enum from AppointmentReminderLead — the two
- * schedules are independent, and sharing one would make every future change to a
- * medication lead silently alter appointment sends too.
- */
-export enum MedicationReminderLead {
-  THIRTY_MINUTES = 'thirty_minutes',
-  AT_TIME = 'at_time',
-}
-
-/**
  * The four roles whose accounts are gated behind admin approval, as the applicant
  * sees themselves. Deliberately not UserRole: this keys the application-email copy
  * table, and a Record<UserRole, ...> would force meaningless entries for patient,

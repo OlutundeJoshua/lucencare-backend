@@ -96,7 +96,9 @@ describe('CommunityReportProcessor', () => {
     await processor.process(job());
 
     expect(notificationsService.createBulk).toHaveBeenCalledTimes(2);
-    expect(notificationsService.createBulk.mock.calls[0][0]).toHaveLength(NOTIFICATION_FAN_OUT_BATCH_SIZE);
+    expect(notificationsService.createBulk.mock.calls[0][0]).toHaveLength(
+      NOTIFICATION_FAN_OUT_BATCH_SIZE,
+    );
     expect(notificationsService.createBulk.mock.calls[1][0]).toHaveLength(5);
   });
 });

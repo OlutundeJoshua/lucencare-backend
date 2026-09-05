@@ -1,4 +1,8 @@
-import { CommunityReportReason, CommunityReportStatus, CommunityReportTarget } from 'src/common/enums';
+import {
+  CommunityReportReason,
+  CommunityReportStatus,
+  CommunityReportTarget,
+} from 'src/common/enums';
 
 /**
  * One row of the admin moderation queue.

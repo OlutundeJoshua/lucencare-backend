@@ -3,7 +3,6 @@ import { Job } from 'bullmq';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 
-import { MedicationReminderLead } from 'src/common/enums';
 import { SEND_MEDICATION_REMINDER_EMAIL_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
 import { renderEmailText } from 'src/modules/mail/email-text.util';
@@ -15,7 +14,7 @@ function target(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     email: 'a@example.com',
     firstName: 'Ada',
-    lead: MedicationReminderLead.AT_TIME,
+    leadMinutes: 0,
     scheduledTime: '8:00 AM',
     medications: [{ name: 'Amlodipine', dosage: '5mg' }],
     streakDays: 4,
@@ -156,7 +155,7 @@ describe('SendMedicationReminderEmailProcessor', () => {
     it('uses the thirty-minute copy for the thirty-minute lead', async () => {
       await processor.process({
         name: SEND_MEDICATION_REMINDER_EMAIL_JOB,
-        data: { targets: [target({ lead: MedicationReminderLead.THIRTY_MINUTES })] },
+        data: { targets: [target({ leadMinutes: 30 })] },
       } as Job<SendMedicationReminderEmailJob>);
 
       const [, subject, body] = sent();
@@ -203,7 +202,7 @@ describe('SendMedicationReminderEmailProcessor', () => {
       await processor.process({
         name: SEND_MEDICATION_REMINDER_EMAIL_JOB,
         data: {
-          targets: [target({ lead: MedicationReminderLead.THIRTY_MINUTES, medications: three })],
+          targets: [target({ leadMinutes: 30, medications: three })],
         },
       } as Job<SendMedicationReminderEmailJob>);
 
@@ -218,7 +217,7 @@ describe('SendMedicationReminderEmailProcessor', () => {
       name: SEND_MEDICATION_REMINDER_EMAIL_JOB,
       data: {
         targets: [
-          target({ email: 'stale@example.com', lead: 'one_hour' }),
+          target({ email: 'stale@example.com', leadMinutes: undefined }),
           target({ email: 'ok@example.com' }),
         ],
       },

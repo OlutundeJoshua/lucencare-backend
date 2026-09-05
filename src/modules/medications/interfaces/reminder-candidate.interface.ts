@@ -1,4 +1,3 @@
-import { MedicationReminderLead } from 'src/common/enums';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 
 /**
@@ -11,7 +10,7 @@ import { Patient } from 'src/modules/patients/entities/patient.entity';
 export interface ReminderCandidate {
   patient: Patient;
   email: string;
-  lead: MedicationReminderLead;
+  leadMinutes: number;
   /** Minutes past local midnight — the grouping key, so two labels at one moment merge. */
   slotMinutes: number;
   /** The date this occurrence lands on, which may be tomorrow for a wrapped lead. */

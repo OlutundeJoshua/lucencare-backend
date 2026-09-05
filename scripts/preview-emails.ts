@@ -19,9 +19,7 @@ import {
   ApplicantRole,
   ApplicationEmailEvent,
   AppointmentConfirmationAction,
-  AppointmentReminderLead,
   EnrollmentStatus,
-  MedicationReminderLead,
 } from 'src/common/enums';
 import {
   SEND_APPLICATION_STATUS_JOB,
@@ -201,15 +199,17 @@ async function collect(): Promise<void> {
     );
   }
 
-  for (const lead of Object.values(AppointmentReminderLead)) {
-    await capture(`reminder-appointment-${lead}`, () =>
+  // The three shapes the generated copy branches on: a day or more out, imminent,
+  // and the appointment's own moment.
+  for (const leadMinutes of [1440, 60, 0]) {
+    await capture(`reminder-appointment-${leadMinutes}min`, () =>
       new SendAppointmentReminderProcessor(mail).process(
         job(SEND_APPOINTMENT_REMINDER_JOB, {
           targets: [
             {
               email: 'ada@example.com',
               firstName: 'Ada',
-              lead,
+              leadMinutes,
               appointmentType: 'Endocrinology follow-up',
               appointmentDate: 'Tuesday, 15 September',
               time: '10:30',
@@ -240,16 +240,16 @@ async function collect(): Promise<void> {
     },
   ];
 
-  for (const lead of Object.values(MedicationReminderLead)) {
+  for (const leadMinutes of [30, 0]) {
     for (const variant of MED_VARIANTS) {
-      await capture(`reminder-medication-${lead}-${variant.slug}`, () =>
+      await capture(`reminder-medication-${leadMinutes}min-${variant.slug}`, () =>
         new SendMedicationReminderEmailProcessor(mail, configService).process(
           job(SEND_MEDICATION_REMINDER_EMAIL_JOB, {
             targets: [
               {
                 email: 'ada@example.com',
                 firstName: 'Ada',
-                lead,
+                leadMinutes,
                 scheduledTime: '8:00 AM',
                 medications: variant.medications,
                 streakDays: variant.streakDays,

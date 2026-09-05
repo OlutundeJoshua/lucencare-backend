@@ -6,7 +6,6 @@ import { getQueueToken } from '@nestjs/bullmq';
 
 import {
   AppointmentConfirmationAction,
-  AppointmentReminderLead,
   AppointmentStatus,
   AppointmentType,
 } from 'src/common/enums';
@@ -81,11 +80,13 @@ describe('AppointmentsService', () => {
     patientRepo = { find: jest.fn().mockResolvedValue([mockPatient]) };
     patientsService = { getMyProfile: jest.fn().mockResolvedValue(mockPatient) };
     // Matches the default tick cadence of */5. See the COUPLED PAIR note in app.config.ts.
-    configService = {
-      get: jest.fn((key: string) =>
-        key === 'app.appointmentReminderWindowMinutes' ? 5 : undefined,
-      ),
+    // Mirrors the shipped defaults: a day ahead, an hour ahead, and on time, matched
+    // against a window equal to the tick interval.
+    const config: Record<string, unknown> = {
+      'app.appointmentReminderWindowMinutes': 5,
+      'reminders.appointmentLeads': [1440, 60, 0],
     };
+    configService = { get: jest.fn((key: string) => config[key]) };
     mailQueue = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -284,7 +285,7 @@ describe('AppointmentsService', () => {
       expect(targets[0]).toEqual({
         email: 'jane@example.com',
         firstName: 'Jane',
-        lead: AppointmentReminderLead.ONE_DAY,
+        leadMinutes: 1440,
         appointmentType: AppointmentType.CONSULTATION,
         appointmentDate: '2026-08-01',
         time: '10:30 AM',
@@ -298,7 +299,7 @@ describe('AppointmentsService', () => {
 
       const targets = await service.findDueReminderTargets(new Date('2026-08-01T08:30:00.000Z'));
 
-      expect(targets.map((t) => t.lead)).toEqual([AppointmentReminderLead.ONE_HOUR]);
+      expect(targets.map((t) => t.leadMinutes)).toEqual([60]);
     });
 
     it('sends the at-time reminder on the appointment itself', async () => {
@@ -306,7 +307,7 @@ describe('AppointmentsService', () => {
 
       const targets = await service.findDueReminderTargets(new Date('2026-08-01T09:30:00.000Z'));
 
-      expect(targets.map((t) => t.lead)).toEqual([AppointmentReminderLead.AT_TIME]);
+      expect(targets.map((t) => t.leadMinutes)).toEqual([0]);
     });
 
     // The window is half-open, so consecutive ticks must not both claim the same
@@ -325,12 +326,73 @@ describe('AppointmentsService', () => {
       const oneHourHits: string[] = [];
       for (const tick of ticks) {
         const targets = await service.findDueReminderTargets(new Date(tick));
-        if (targets.some((t) => t.lead === AppointmentReminderLead.ONE_HOUR)) {
+        if (targets.some((t) => t.leadMinutes === 60)) {
           oneHourHits.push(tick);
         }
       }
 
       expect(oneHourHits).toEqual(['2026-08-01T08:30:00.000Z']);
+    });
+
+    describe('configured schedule', () => {
+      /** Re-point the mocked config at a different lead schedule. */
+      function withLeads(leads: number[]) {
+        (configService.get as jest.Mock).mockImplementation((key: string) =>
+          key === 'reminders.appointmentLeads' ? leads : 5,
+        );
+      }
+
+      // Turning reminders off has to be possible without a deploy.
+      it('sends nothing at all when the schedule is empty', async () => {
+        arrangeScan([mockAppointment]);
+        withLeads([]);
+
+        for (const tick of [
+          '2026-07-31T09:30:00.000Z',
+          '2026-08-01T08:30:00.000Z',
+          '2026-08-01T09:30:00.000Z',
+        ]) {
+          expect(await service.findDueReminderTargets(new Date(tick))).toEqual([]);
+        }
+      });
+
+      it('fires at a configured lead the defaults do not include', async () => {
+        arrangeScan([mockAppointment]);
+        withLeads([120]);
+
+        // 08:30 local is two hours before the 10:30 appointment.
+        const targets = await service.findDueReminderTargets(new Date('2026-08-01T07:30:00.000Z'));
+
+        expect(targets.map((t) => t.leadMinutes)).toEqual([120]);
+      });
+
+      it('stops firing at a lead removed from the schedule', async () => {
+        arrangeScan([mockAppointment]);
+        withLeads([1440, 0]);
+
+        // The hour-ahead tick, which the default schedule would have claimed.
+        expect(await service.findDueReminderTargets(new Date('2026-08-01T08:30:00.000Z'))).toEqual(
+          [],
+        );
+      });
+
+      // A horizon shorter than the furthest lead selects no rows for it, and that
+      // reminder silently never fires — the failure looks exactly like the feature
+      // not working, so the horizon is derived rather than fixed.
+      it('widens the scan horizon to cover the furthest configured lead', async () => {
+        arrangeScan([mockAppointment]);
+        withLeads([3 * 24 * 60, 0]);
+
+        await service.findDueReminderTargets(new Date('2026-07-29T09:30:00.000Z'));
+
+        const range = appointmentRepo.createQueryBuilder.mock.results
+          .map((r) => r.value)
+          .flatMap((qb) => qb.andWhere.mock.calls)
+          .find((call: unknown[]) => String(call[0]).includes('appointment_date BETWEEN'));
+
+        // Three days of lead plus a day of margin.
+        expect(range?.[1]).toMatchObject({ to: '2026-08-02' });
+      });
     });
 
     it('sends nothing at a time that matches no lead', async () => {
@@ -359,7 +421,7 @@ describe('AppointmentsService', () => {
       // window. 10:30 local on 2026-08-01 is 04:45 UTC.
       const targets = await service.findDueReminderTargets(new Date('2026-08-01T04:45:00.000Z'));
 
-      expect(targets.map((t) => t.lead)).toEqual([AppointmentReminderLead.AT_TIME]);
+      expect(targets.map((t) => t.leadMinutes)).toEqual([0]);
     });
 
     it('returns nothing when the scan finds no appointments', async () => {

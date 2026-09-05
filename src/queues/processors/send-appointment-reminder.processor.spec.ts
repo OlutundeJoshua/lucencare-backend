@@ -2,7 +2,6 @@ import { Job } from 'bullmq';
 
 import { Test, TestingModule } from '@nestjs/testing';
 
-import { AppointmentReminderLead } from 'src/common/enums';
 import { SEND_APPOINTMENT_REMINDER_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
 import { EmailContent } from 'src/common/interfaces/email-content.interface';
@@ -15,7 +14,7 @@ function target(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     email: 'jane@example.com',
     firstName: 'Jane',
-    lead: AppointmentReminderLead.ONE_DAY,
+    leadMinutes: 1440,
     appointmentType: 'consultation',
     appointmentDate: '2026-08-01',
     time: '10:30 AM',
@@ -83,10 +82,10 @@ describe('SendAppointmentReminderProcessor', () => {
   });
 
   it('uses the one-hour copy for the one-hour lead', async () => {
-    await processor.process(jobFor([target({ lead: AppointmentReminderLead.ONE_HOUR })]));
+    await processor.process(jobFor([target({ leadMinutes: 60 })]));
 
     const [, subject, body] = sent();
-    expect(subject).toBe('Jane, your appointment is in an hour');
+    expect(subject).toBe('Jane, your appointment is in 1 hour');
     expect(body).toContain("You've got an appointment in 1 hour.");
     expect(body).toContain('60-second prep list');
   });
@@ -96,7 +95,7 @@ describe('SendAppointmentReminderProcessor', () => {
   it('skips a target whose lead this build no longer knows, and sends the rest', async () => {
     await processor.process(
       jobFor([
-        target({ email: 'stale@example.com', lead: 'thirty_minutes' }),
+        target({ email: 'stale@example.com', leadMinutes: undefined }),
         target({ email: 'jane@example.com' }),
       ]),
     );
@@ -108,7 +107,7 @@ describe('SendAppointmentReminderProcessor', () => {
   // A prep checklist arriving as someone walks in reads as pressure, not help — there
   // is no longer time to act on it.
   it('drops the prep list on the at-time reminder', async () => {
-    await processor.process(jobFor([target({ lead: AppointmentReminderLead.AT_TIME })]));
+    await processor.process(jobFor([target({ leadMinutes: 0 })]));
 
     const [, subject, body] = sent();
     expect(subject).toBe("Jane, it's appointment time");

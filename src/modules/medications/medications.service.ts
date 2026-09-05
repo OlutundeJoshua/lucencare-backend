@@ -5,13 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
-import {
-  AuditAction,
-  DoseStatus,
-  MedicationReminderLead,
-  NotificationType,
-} from 'src/common/enums';
-import { MEDICATION_REMINDER_LEAD_MINUTES } from 'src/common/constants/medication-reminder-leads';
+import { AuditAction, DoseStatus, NotificationType } from 'src/common/enums';
 import { LocalClock } from 'src/common/interfaces/local-clock.interface';
 import { ParsedTimeLabel } from 'src/common/interfaces/parsed-time-label.interface';
 import { firstName } from 'src/common/utils/first-name.util';
@@ -369,9 +363,10 @@ export class MedicationsService {
     const emailByUserId = new Map(users.map((u) => [u.id, u.email]));
 
     const windowMinutes = this.reminderWindowMinutes();
-    const leads = Object.entries(MEDICATION_REMINDER_LEAD_MINUTES) as Array<
-      [MedicationReminderLead, number]
-    >;
+    // Configured schedule (MEDICATION_REMINDER_LEADS). Empty means reminders are off,
+    // and the loop below then matches nothing.
+    const leads = this.configService.get<number[]>('reminders.medicationLeads') ?? [];
+    if (leads.length === 0) return [];
 
     // Collected first and filtered second: the already-taken check is one query for the
     // whole tick rather than one per dose, which at a popular slot like 8:00 AM is the
@@ -399,7 +394,7 @@ export class MedicationsService {
           const next = minutesUntilNextDailyOccurrence(parsed, local);
           if (!next) continue;
 
-          for (const [lead, leadMinutes] of leads) {
+          for (const leadMinutes of leads) {
             // Half-open [lead, lead + window): each dose is claimed by exactly one tick
             // per lead, so none falls between two ticks and none is reminded twice.
             const due =
@@ -409,7 +404,7 @@ export class MedicationsService {
             candidates.push({
               patient,
               email,
-              lead,
+              leadMinutes,
               slotMinutes: parsed.minutes,
               doseDate: next.dateIso,
               medicationId: med.id,
@@ -461,7 +456,7 @@ export class MedicationsService {
       const key = `${candidate.medicationId}|${candidate.doseDate}|${candidate.scheduledTime}`;
       if (resolved.has(key)) continue;
 
-      const groupKey = `${candidate.patient.id}|${candidate.lead}|${candidate.slotMinutes}`;
+      const groupKey = `${candidate.patient.id}|${candidate.leadMinutes}|${candidate.slotMinutes}`;
       const group = groups.get(groupKey) ?? [];
       group.push(candidate);
       groups.set(groupKey, group);
@@ -485,7 +480,7 @@ export class MedicationsService {
       targets.push({
         email: first.email,
         firstName: firstName(first.patient.name ?? ''),
-        lead: first.lead,
+        leadMinutes: first.leadMinutes,
         scheduledTime: formatMinutesAsLabel(first.slotMinutes),
         // Deduped: the same medication can carry the same moment under two labels.
         medications: [

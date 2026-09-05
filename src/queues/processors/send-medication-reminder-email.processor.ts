@@ -2,47 +2,52 @@ import { Job } from 'bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-import { MedicationReminderLead } from 'src/common/enums';
 import { SEND_MEDICATION_REMINDER_EMAIL_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
+import { formatLeadPhrase } from 'src/common/utils/lead-phrase.util';
 import { EmailBlock } from 'src/common/interfaces/email-block.type';
 import { ReminderMedication } from 'src/modules/medications/interfaces/reminder-medication.interface';
 import { SendMedicationReminderEmailJob } from 'src/queues/interfaces/send-medication-reminder-email-job.interface';
 
 /**
- * Per-lead copy. Add a lead to MedicationReminderLead plus
- * MEDICATION_REMINDER_LEAD_MINUTES and an entry here — the Record makes a missing one a
- * compile error rather than a silently unsent email.
+ * The copy for a dose reminder, derived from how far ahead it is.
  *
- * Subjects are split by count because one email can now cover several medications: a
- * patient with three due at 8:00 AM gets one email, not three.
+ * Generated rather than written per lead because the schedule is configurable
+ * (MEDICATION_REMINDER_LEADS) — copy keyed to a lead's name would disagree with the
+ * email's own arrival time the moment someone changed the value.
+ *
+ * Subjects branch on count as well as distance: one email can now cover several
+ * medications, since a patient with three due at 8:00 AM gets one email, not three.
  */
-const MEDICATION_REMINDER_COPY: Record<
-  MedicationReminderLead,
-  {
-    subject: (name: string, meds: ReminderMedication[]) => string;
-    opener: string;
-    nudge: string;
+function medicationReminderCopy(leadMinutes: number): {
+  subject: (name: string, meds: ReminderMedication[]) => string;
+  opener: string;
+  nudge: string;
+} {
+  if (leadMinutes <= 0) {
+    return {
+      subject: (name, meds) =>
+        meds.length === 1
+          ? `${name}, it's ${meds[0].name} o'clock`
+          : `${name}, ${meds.length} medications due now`,
+      // The original line, kept deliberately — it is the one people quote back.
+      opener: "Ding ding! It's time for:",
+      nudge:
+        "It takes a few seconds, and it's one of the best things you'll do for yourself today.",
+    };
   }
-> = {
-  [MedicationReminderLead.THIRTY_MINUTES]: {
+
+  const phrase = formatLeadPhrase(leadMinutes);
+
+  return {
     subject: (name, meds) =>
       meds.length === 1
-        ? `${name}, ${meds[0].name} in 30 minutes`
-        : `${name}, ${meds.length} medications in 30 minutes`,
-    opener: 'Heads up — coming up in 30 minutes:',
+        ? `${name}, ${meds[0].name} ${phrase}`
+        : `${name}, ${meds.length} medications ${phrase}`,
+    opener: `Heads up — coming up ${phrase}:`,
     nudge: "A little warning so it doesn't sneak up on you.",
-  },
-  // The original line, kept deliberately — it is the one people quote back.
-  [MedicationReminderLead.AT_TIME]: {
-    subject: (name, meds) =>
-      meds.length === 1
-        ? `${name}, it's ${meds[0].name} o'clock`
-        : `${name}, ${meds.length} medications due now`,
-    opener: "Ding ding! It's time for:",
-    nudge: "It takes a few seconds, and it's one of the best things you'll do for yourself today.",
-  },
-};
+  };
+}
 
 @Injectable()
 export class SendMedicationReminderEmailProcessor {
@@ -59,14 +64,17 @@ export class SendMedicationReminderEmailProcessor {
     const scheduleUrl = `${this.configService.get<string>('app.frontendUrl')}/patient/medications/schedule`;
 
     for (const target of job.data.targets) {
-      const copy = MEDICATION_REMINDER_COPY[target.lead];
-      // A job enqueued just before a deploy that changed the lead set carries a lead
-      // this build no longer knows. Skip it rather than throwing — one stale target
-      // must not fail the whole batch of up to 200 reminders behind it.
-      if (!copy) {
-        this.logger.warn(`Skipping medication reminder with unknown lead=${target.lead}`);
+      // A job enqueued just before the deploy that introduced leadMinutes carries the
+      // old named lead instead, leaving this undefined. Skip it rather than rendering
+      // "in NaN hours" — and one stale target must not fail the whole batch behind it.
+      if (!Number.isFinite(target.leadMinutes)) {
+        this.logger.warn(
+          `Skipping medication reminder with unreadable leadMinutes=${target.leadMinutes}`,
+        );
         continue;
       }
+
+      const copy = medicationReminderCopy(target.leadMinutes);
 
       // Defensive: a target with nothing due carries no message. The service already
       // drops empty groups, so this only guards a malformed payload.
@@ -115,7 +123,7 @@ export class SendMedicationReminderEmailProcessor {
         // Isolate per-target failures so one bad address/transient SMTP error
         // doesn't drop reminders for the rest of this batch of up to 200 patients.
         this.logger.error(
-          `Failed to send medication reminder to=${target.email} lead=${target.lead}: ${(err as Error).message}`,
+          `Failed to send medication reminder to=${target.email} lead=${target.leadMinutes}: ${(err as Error).message}`,
         );
       }
     }

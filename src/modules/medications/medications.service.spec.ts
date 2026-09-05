@@ -3,12 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { In } from 'typeorm';
 
-import {
-  AuditAction,
-  DoseStatus,
-  MedicationReminderLead,
-  NotificationType,
-} from 'src/common/enums';
+import { AuditAction, DoseStatus, NotificationType } from 'src/common/enums';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
 import { ConfigService } from '@nestjs/config';
@@ -144,13 +139,13 @@ describe('MedicationsService', () => {
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     notificationsService = { createOne: jest.fn().mockResolvedValue(undefined) };
     // Matches the default tick cadence of */30. See the COUPLED PAIR note in app.config.ts.
-    configService = {
-      // Must match the tick interval, as in app.config.ts — the leads are 30 and 0
-      // minutes, so a wider window would let one tick claim a dose for both at once.
-      get: jest.fn((key: string) =>
-        key === 'app.medicationReminderWindowMinutes' ? 5 : undefined,
-      ),
+    // The window must match the tick interval, as in app.config.ts — with leads of 30
+    // and 0 minutes, a wider window would let one tick claim a dose for both at once.
+    const config: Record<string, unknown> = {
+      'app.medicationReminderWindowMinutes': 5,
+      'reminders.medicationLeads': [30, 0],
     };
+    configService = { get: jest.fn((key: string) => config[key]) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -457,7 +452,7 @@ describe('MedicationsService', () => {
         {
           email: 'patient@example.com',
           firstName: 'Ada',
-          lead: MedicationReminderLead.AT_TIME,
+          leadMinutes: 0,
           scheduledTime: '8:00 AM',
           medications: [{ name: 'Metformin', dosage: '500 mg' }],
           streakDays: 0,
@@ -526,7 +521,7 @@ describe('MedicationsService', () => {
         setup('9:15 AM');
         const targets = await service.findDueReminderTargets(lagosTick('08:45'));
         expect(targets).toHaveLength(1);
-        expect(targets[0].lead).toBe(MedicationReminderLead.THIRTY_MINUTES);
+        expect(targets[0].leadMinutes).toBe(30);
         expect(targets[0].scheduledTime).toBe('9:15 AM');
       });
 
@@ -534,7 +529,7 @@ describe('MedicationsService', () => {
         setup('9:15 AM');
         const targets = await service.findDueReminderTargets(lagosTick('09:15'));
         expect(targets).toHaveLength(1);
-        expect(targets[0].lead).toBe(MedicationReminderLead.AT_TIME);
+        expect(targets[0].leadMinutes).toBe(0);
       });
 
       // Exactly-once per lead: neither lead may fire on a tick between the two.
@@ -558,13 +553,10 @@ describe('MedicationsService', () => {
             `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`,
           );
           const targets = await service.findDueReminderTargets(tick);
-          fired.push(...targets.map((t) => `${t.scheduledTime}|${t.lead}`));
+          fired.push(...targets.map((t) => `${t.scheduledTime}|${t.leadMinutes}`));
         }
 
-        const expected = times.flatMap((t) => [
-          `${t}|${MedicationReminderLead.THIRTY_MINUTES}`,
-          `${t}|${MedicationReminderLead.AT_TIME}`,
-        ]);
+        const expected = times.flatMap((t) => [`${t}|30`, `${t}|0`]);
         expect(fired.sort()).toEqual(expected.sort());
       });
 
@@ -575,12 +567,58 @@ describe('MedicationsService', () => {
         // 09:15 Kathmandu == 03:30 UTC, the dose's own moment.
         const targets = await service.findDueReminderTargets(new Date('2026-07-17T03:30:00.000Z'));
         expect(targets).toHaveLength(1);
-        expect(targets[0].lead).toBe(MedicationReminderLead.AT_TIME);
+        expect(targets[0].leadMinutes).toBe(0);
       });
 
       it('ignores a dose time it cannot parse instead of throwing', async () => {
         setup('sometime in the morning');
         await expect(service.findDueReminderTargets(lagosTick('09:00'))).resolves.toEqual([]);
+      });
+
+      describe('configured schedule', () => {
+        function withLeads(leads: number[]) {
+          (configService.get as jest.Mock).mockImplementation((key: string) =>
+            key === 'reminders.medicationLeads' ? leads : 5,
+          );
+        }
+
+        // Turning reminders off has to be possible without a deploy.
+        it('sends nothing at all when the schedule is empty', async () => {
+          setup('9:15 AM');
+          withLeads([]);
+
+          for (const tick of ['08:45', '09:15']) {
+            expect(await service.findDueReminderTargets(lagosTick(tick))).toEqual([]);
+          }
+        });
+
+        // The dose log is only worth reading if something might be sent.
+        it('does not touch the dose log when the schedule is empty', async () => {
+          setup('9:15 AM');
+          withLeads([]);
+
+          await service.findDueReminderTargets(lagosTick('09:15'));
+
+          expect(doseLogRepo.find).not.toHaveBeenCalled();
+        });
+
+        it('fires at a configured lead the defaults do not include', async () => {
+          setup('9:15 AM');
+          withLeads([120, 0]);
+
+          const targets = await service.findDueReminderTargets(lagosTick('07:15'));
+
+          expect(targets).toHaveLength(1);
+          expect(targets[0].leadMinutes).toBe(120);
+        });
+
+        it('stops firing at a lead removed from the schedule', async () => {
+          setup('9:15 AM');
+          withLeads([0]);
+
+          expect(await service.findDueReminderTargets(lagosTick('08:45'))).toEqual([]);
+          expect(await service.findDueReminderTargets(lagosTick('09:15'))).toHaveLength(1);
+        });
       });
 
       describe('grouping', () => {
@@ -723,7 +761,7 @@ describe('MedicationsService', () => {
           const targets = await service.findDueReminderTargets(lagosTick('23:40'));
 
           expect(targets).toHaveLength(1);
-          expect(targets[0].lead).toBe(MedicationReminderLead.THIRTY_MINUTES);
+          expect(targets[0].leadMinutes).toBe(30);
           expect(targets[0].scheduledTime).toBe('12:10 AM');
         });
 

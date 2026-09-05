@@ -90,7 +90,7 @@ describe('NotificationsQueueProcessor', () => {
 
   // Programme outcomes are produced on ADMIN_QUEUE, so routing them here matched
   // nothing and removeOnComplete discarded them. They belong to AdminQueueProcessor.
-  it('ignores program_approved — it is not this queue\'s job', async () => {
+  it("ignores program_approved — it is not this queue's job", async () => {
     const job = { name: PROGRAM_APPROVED_JOB, data: {} } as Job;
     await expect(processor.process(job)).resolves.toBeUndefined();
   });

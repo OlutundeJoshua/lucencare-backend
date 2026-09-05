@@ -67,10 +67,7 @@ export enum ProgramStatus {
  * purpose: fixing what the reviewer objected to and resubmitting is the point of
  * recording a reason, and without this edge a rejection is terminal.
  */
-export const SUBMITTABLE_PROGRAM_STATUSES = [
-  ProgramStatus.DRAFT,
-  ProgramStatus.REJECTED,
-] as const;
+export const SUBMITTABLE_PROGRAM_STATUSES = [ProgramStatus.DRAFT, ProgramStatus.REJECTED] as const;
 
 /**
  * The states an NGO may still edit freely. Once approved a programme is public and
@@ -340,8 +337,19 @@ export enum AppointmentConfirmationAction {
  * add a member plus its entry in APPOINTMENT_REMINDER_LEADS and the tick picks it up.
  */
 export enum AppointmentReminderLead {
-  THREE_DAYS = 'three_days',
+  ONE_DAY = 'one_day',
   ONE_HOUR = 'one_hour',
+  AT_TIME = 'at_time',
+}
+
+/**
+ * The same idea for a medication dose: one member per email the patient receives for
+ * the same dose. Deliberately a separate enum from AppointmentReminderLead — the two
+ * schedules are independent, and sharing one would make every future change to a
+ * medication lead silently alter appointment sends too.
+ */
+export enum MedicationReminderLead {
+  THIRTY_MINUTES = 'thirty_minutes',
   AT_TIME = 'at_time',
 }
 

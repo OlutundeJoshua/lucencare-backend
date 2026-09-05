@@ -5,12 +5,20 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
-import { AuditAction, DoseStatus, NotificationType } from 'src/common/enums';
+import {
+  AuditAction,
+  DoseStatus,
+  MedicationReminderLead,
+  NotificationType,
+} from 'src/common/enums';
+import { MEDICATION_REMINDER_LEAD_MINUTES } from 'src/common/constants/medication-reminder-leads';
 import { LocalClock } from 'src/common/interfaces/local-clock.interface';
 import { ParsedTimeLabel } from 'src/common/interfaces/parsed-time-label.interface';
 import { firstName } from 'src/common/utils/first-name.util';
 import {
   appliesOnDate,
+  formatMinutesAsLabel,
+  minutesUntilNextDailyOccurrence,
   minutesUntilScheduled,
   nowInTimezone,
   parseTimeLabel,
@@ -32,6 +40,7 @@ import { ScheduledDoseResult } from './interfaces/scheduled-dose-result.interfac
 import { ScheduleSlotResult } from './interfaces/schedule-slot-result.interface';
 import { RefillAlertResult } from './interfaces/refill-alert-result.interface';
 import { MedicationStats } from './interfaces/medication-stats.interface';
+import { ReminderCandidate } from './interfaces/reminder-candidate.interface';
 import { ReminderTarget } from './interfaces/reminder-target.interface';
 import { RefillAlertTarget } from './interfaces/refill-alert-target.interface';
 
@@ -39,7 +48,11 @@ const URGENT_THRESHOLD_DAYS = 7;
 const UPCOMING_THRESHOLD_DAYS = 14;
 const MAX_STREAK_LOOKBACK_DAYS = 365;
 const DUE_NOW_WINDOW_MINUTES = 15;
-const DEFAULT_REMINDER_WINDOW_MINUTES = 30;
+// Must equal the medication reminder tick interval (app.config.ts) — 5 minutes. This
+// is the fallback used when the env var is unset, so a stale value here is not
+// harmless: at a 30-minute window against a 5-minute tick, every dose matches on six
+// consecutive ticks and the patient gets six copies of the same reminder.
+const DEFAULT_REMINDER_WINDOW_MINUTES = 5;
 const DEFAULT_DOSE_GRACE_MINUTES = 60;
 const DEFAULT_LATER_DOSE_GRACE_MINUTES = 120;
 
@@ -102,7 +115,11 @@ export class MedicationsService {
     return saved;
   }
 
-  async updateMedication(userId: string, id: string, dto: UpdateMedicationDto): Promise<Medication> {
+  async updateMedication(
+    userId: string,
+    id: string,
+    dto: UpdateMedicationDto,
+  ): Promise<Medication> {
     const medication = await this.getOwnedMedication(userId, id);
 
     const updates: Partial<Medication> = {};
@@ -138,11 +155,17 @@ export class MedicationsService {
     await this.medicationRepo.softDelete({ id: medication.id });
     await this.syncMedicationListSummary(medication.patientId);
 
-    const deleted = await this.medicationRepo.findOne({ where: { id: medication.id }, withDeleted: true });
+    const deleted = await this.medicationRepo.findOne({
+      where: { id: medication.id },
+      withDeleted: true,
+    });
     return { id: medication.id, deletedAt: deleted!.deletedAt! };
   }
 
-  async getSchedule(userId: string, date?: string): Promise<{ date: string; slots: ScheduleSlotResult[] }> {
+  async getSchedule(
+    userId: string,
+    date?: string,
+  ): Promise<{ date: string; slots: ScheduleSlotResult[] }> {
     const patient = await this.patientsService.getMyProfile(userId);
     const targetDate = date ?? this.todayIso();
 
@@ -150,7 +173,9 @@ export class MedicationsService {
     const nowLocal = this.nowInTimezone(new Date(), patient.timezone ?? 'UTC');
     await this.ensureDoseLogsForDate(patient.id, medications, targetDate, nowLocal);
 
-    const logs = await this.doseLogRepo.find({ where: { patientId: patient.id, doseDate: targetDate } });
+    const logs = await this.doseLogRepo.find({
+      where: { patientId: patient.id, doseDate: targetDate },
+    });
     const medById = new Map(medications.map((m) => [m.id, m]));
 
     const slots = new Map<string, ScheduleSlotResult>();
@@ -281,7 +306,11 @@ export class MedicationsService {
     });
 
     const dueToday = await this.doseLogRepo.count({
-      where: { patientId: patient.id, doseDate: today, status: In([DoseStatus.PENDING, DoseStatus.LATER]) },
+      where: {
+        patientId: patient.id,
+        doseDate: today,
+        status: In([DoseStatus.PENDING, DoseStatus.LATER]),
+      },
     });
 
     const missedToday = await this.doseLogRepo.count({
@@ -293,7 +322,10 @@ export class MedicationsService {
     return { activeMeds, takenToday, dueToday, missedToday, adherenceStreakDays };
   }
 
-  async registerReminders(userId: string, dto: RegisterRemindersDto): Promise<{ registered: true }> {
+  async registerReminders(
+    userId: string,
+    dto: RegisterRemindersDto,
+  ): Promise<{ registered: true }> {
     const patient = await this.patientsService.getMyProfile(userId);
     await this.patientRepo.update(
       { id: patient.id },
@@ -311,6 +343,14 @@ export class MedicationsService {
   // Called by medication-reminder-tick.processor.ts. Scoped to reminder-opted-in
   // patients only, then compared in-memory against a bounded, already-filtered
   // batch — not a substitute for SQL-side scoping of the wider patients table.
+  /**
+   * The reminder emails due to go out on this tick.
+   *
+   * Each dose is matched against every entry in MEDICATION_REMINDER_LEAD_MINUTES, so
+   * one dose produces one email per lead (30 minutes ahead, then at the dose's own
+   * moment). Results are grouped by patient, lead and slot: three medications sharing
+   * 8:00 AM are one email, not three.
+   */
   async findDueReminderTargets(now: Date = new Date()): Promise<ReminderTarget[]> {
     const patients = await this.patientRepo.find({ where: { medicationRemindersEnabled: true } });
     if (patients.length === 0) return [];
@@ -329,8 +369,15 @@ export class MedicationsService {
     const emailByUserId = new Map(users.map((u) => [u.id, u.email]));
 
     const windowMinutes = this.reminderWindowMinutes();
+    const leads = Object.entries(MEDICATION_REMINDER_LEAD_MINUTES) as Array<
+      [MedicationReminderLead, number]
+    >;
 
-    const targets: ReminderTarget[] = [];
+    // Collected first and filtered second: the already-taken check is one query for the
+    // whole tick rather than one per dose, which at a popular slot like 8:00 AM is the
+    // difference between a single round trip and hundreds.
+    const candidates: ReminderCandidate[] = [];
+
     for (const patient of patients) {
       const email = emailByUserId.get(patient.userId);
       if (!email) continue;
@@ -341,38 +388,113 @@ export class MedicationsService {
       const local = this.nowInTimezone(now, patient.timezone ?? 'UTC');
       if (!local) continue;
 
-      // Resolved lazily and once per patient, not per dose: the reminder copy quotes
-      // the streak, but calcAdherenceStreak walks day by day, so computing it for a
-      // patient with no dose due on this tick — or once per scheduled time — would
-      // multiply the query count for nothing.
-      let streakDays: number | undefined;
-      const streakFor = async () => {
-        if (streakDays === undefined) streakDays = await this.calcAdherenceStreak(patient.id);
-        return streakDays;
-      };
-
       for (const med of medsByPatientId.get(patient.id) ?? []) {
         for (const scheduledTime of med.scheduleTimes) {
           const parsed = this.parseDoseTime(scheduledTime);
-          if (!parsed || !this.appliesOnDate(parsed, local.dateIso)) continue;
+          if (!parsed) continue;
 
-          // Half-open [now, now + window): each dose is claimed by exactly one tick,
-          // so no dose falls between two ticks and none is reminded twice. Matching
-          // on the parsed minute is what lets any time work, not just fixed slots.
-          const due = parsed.minutes >= local.minutes && parsed.minutes < local.minutes + windowMinutes;
-          if (!due) continue;
+          // Wrap-aware, and it returns the date the occurrence lands on: at 23:40 a
+          // 12:10 AM dose is 30 minutes away and belongs to tomorrow, which is also the
+          // date its weekday and its dose log must be read against.
+          const next = minutesUntilNextDailyOccurrence(parsed, local);
+          if (!next) continue;
 
-          // The medication's own label, so the email states the time the patient chose.
-          targets.push({
-            email,
-            firstName: firstName(patient.name ?? ''),
-            medicationName: med.name,
-            dosage: med.dosage,
-            scheduledTime,
-            streakDays: await streakFor(),
-          });
+          for (const [lead, leadMinutes] of leads) {
+            // Half-open [lead, lead + window): each dose is claimed by exactly one tick
+            // per lead, so none falls between two ticks and none is reminded twice.
+            const due =
+              next.minutesUntil >= leadMinutes && next.minutesUntil < leadMinutes + windowMinutes;
+            if (!due) continue;
+
+            candidates.push({
+              patient,
+              email,
+              lead,
+              slotMinutes: parsed.minutes,
+              doseDate: next.dateIso,
+              medicationId: med.id,
+              // The label as stored, because that is how the dose log is keyed.
+              scheduledTime,
+              name: med.name,
+              dosage: med.dosage,
+            });
+          }
         }
       }
+    }
+
+    if (candidates.length === 0) return [];
+
+    const resolved = await this.findResolvedDoseKeys(candidates);
+
+    return this.groupCandidates(candidates, resolved);
+  }
+
+  /**
+   * The `medicationId|doseDate|scheduledTime` keys among these candidates that the
+   * patient has already dealt with.
+   *
+   * TAKEN and SKIPPED only. A LATER dose was deliberately deferred, so its reminder is
+   * still wanted; a dose with no log row at all has simply not been touched yet, since
+   * rows are written lazily.
+   */
+  private async findResolvedDoseKeys(candidates: ReminderCandidate[]): Promise<Set<string>> {
+    const logs = await this.doseLogRepo.find({
+      where: {
+        medicationId: In([...new Set(candidates.map((c) => c.medicationId))]),
+        doseDate: In([...new Set(candidates.map((c) => c.doseDate))]),
+        status: In([DoseStatus.TAKEN, DoseStatus.SKIPPED]),
+      },
+    });
+
+    // The query is a cross product of ids and dates, so match the exact triple here.
+    return new Set(logs.map((l) => `${l.medicationId}|${l.doseDate}|${l.scheduledTime}`));
+  }
+
+  /** Folds candidates into one target per patient, lead and slot. */
+  private async groupCandidates(
+    candidates: ReminderCandidate[],
+    resolved: Set<string>,
+  ): Promise<ReminderTarget[]> {
+    const groups = new Map<string, ReminderCandidate[]>();
+    for (const candidate of candidates) {
+      const key = `${candidate.medicationId}|${candidate.doseDate}|${candidate.scheduledTime}`;
+      if (resolved.has(key)) continue;
+
+      const groupKey = `${candidate.patient.id}|${candidate.lead}|${candidate.slotMinutes}`;
+      const group = groups.get(groupKey) ?? [];
+      group.push(candidate);
+      groups.set(groupKey, group);
+    }
+
+    // Resolved lazily and once per patient, not per group: the reminder copy quotes the
+    // streak, but calcAdherenceStreak walks day by day, so computing it for a patient
+    // with nothing due — or once per slot — would multiply the query count for nothing.
+    const streakByPatientId = new Map<string, number>();
+    const streakFor = async (patientId: string) => {
+      const cached = streakByPatientId.get(patientId);
+      if (cached !== undefined) return cached;
+      const streak = await this.calcAdherenceStreak(patientId);
+      streakByPatientId.set(patientId, streak);
+      return streak;
+    };
+
+    const targets: ReminderTarget[] = [];
+    for (const group of groups.values()) {
+      const [first] = group;
+      targets.push({
+        email: first.email,
+        firstName: firstName(first.patient.name ?? ''),
+        lead: first.lead,
+        scheduledTime: formatMinutesAsLabel(first.slotMinutes),
+        // Deduped: the same medication can carry the same moment under two labels.
+        medications: [
+          ...new Map(
+            group.map((c) => [`${c.name}|${c.dosage}`, { name: c.name, dosage: c.dosage }]),
+          ).values(),
+        ],
+        streakDays: await streakFor(first.patient.id),
+      });
     }
 
     return targets;
@@ -453,7 +575,11 @@ export class MedicationsService {
       const timezone = timezoneByPatientId.get(log.patientId);
       if (!timezone) continue;
 
-      const elapsed = this.minutesSinceScheduled(log.doseDate, log.scheduledTime, localFor(timezone));
+      const elapsed = this.minutesSinceScheduled(
+        log.doseDate,
+        log.scheduledTime,
+        localFor(timezone),
+      );
       if (elapsed === undefined) continue;
 
       if (elapsed > this.graceMinutesFor(log.status)) overdueIds.push(log.id);
@@ -654,12 +780,7 @@ export class MedicationsService {
       where: {
         patientId,
         doseDate: dateIso,
-        status: In([
-          DoseStatus.PENDING,
-          DoseStatus.LATER,
-          DoseStatus.SKIPPED,
-          DoseStatus.MISSED,
-        ]),
+        status: In([DoseStatus.PENDING, DoseStatus.LATER, DoseStatus.SKIPPED, DoseStatus.MISSED]),
       },
     });
     return nonTaken === 0;

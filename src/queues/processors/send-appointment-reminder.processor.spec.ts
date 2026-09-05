@@ -15,7 +15,7 @@ function target(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     email: 'jane@example.com',
     firstName: 'Jane',
-    lead: AppointmentReminderLead.THREE_DAYS,
+    lead: AppointmentReminderLead.ONE_DAY,
     appointmentType: 'consultation',
     appointmentDate: '2026-08-01',
     time: '10:30 AM',
@@ -72,9 +72,9 @@ describe('SendAppointmentReminderProcessor', () => {
 
     const [to, subject, body] = sent();
     expect(to).toBe('jane@example.com');
-    expect(subject).toBe("Psst, Jane — you've got an appointment coming up!");
+    expect(subject).toBe("Psst, Jane — you've got an appointment tomorrow!");
     expect(body).toContain('Hey Jane,');
-    expect(body).toContain("You've got an appointment in 3 days.");
+    expect(body).toContain("You've got an appointment tomorrow.");
     expect(body).toContain('Type: consultation');
     expect(body).toContain('Date: 2026-08-01');
     expect(body).toContain('Time: 10:30 AM');
@@ -89,6 +89,20 @@ describe('SendAppointmentReminderProcessor', () => {
     expect(subject).toBe('Jane, your appointment is in an hour');
     expect(body).toContain("You've got an appointment in 1 hour.");
     expect(body).toContain('60-second prep list');
+  });
+
+  // A job enqueued just before a deploy that changed the lead set carries a lead this
+  // build no longer knows. It must not take the rest of the batch down with it.
+  it('skips a target whose lead this build no longer knows, and sends the rest', async () => {
+    await processor.process(
+      jobFor([
+        target({ email: 'stale@example.com', lead: 'thirty_minutes' }),
+        target({ email: 'jane@example.com' }),
+      ]),
+    );
+
+    expect(mailService.send).toHaveBeenCalledTimes(1);
+    expect(mailService.send.mock.calls[0][0]).toBe('jane@example.com');
   });
 
   // A prep checklist arriving as someone walks in reads as pressure, not help — there

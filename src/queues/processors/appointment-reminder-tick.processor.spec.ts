@@ -99,7 +99,9 @@ describe('AppointmentReminderTickProcessor', () => {
 
   // One job per patient at scale is what the batch size exists to prevent.
   it('splits a large fan-out into batches rather than one job per target', async () => {
-    const targets = Array.from({ length: NOTIFICATION_FAN_OUT_BATCH_SIZE + 5 }, (_, i) => target(i));
+    const targets = Array.from({ length: NOTIFICATION_FAN_OUT_BATCH_SIZE + 5 }, (_, i) =>
+      target(i),
+    );
     appointmentsService.findDueReminderTargets.mockResolvedValue(targets);
 
     await processor.process({ name: APPOINTMENT_REMINDER_TICK_JOB } as Job);

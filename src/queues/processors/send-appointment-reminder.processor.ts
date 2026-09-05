@@ -18,9 +18,9 @@ const APPOINTMENT_REMINDER_COPY: Record<
   AppointmentReminderLead,
   { subject: (name: string) => string; opener: string; prep: boolean }
 > = {
-  [AppointmentReminderLead.THREE_DAYS]: {
-    subject: (name) => `Psst, ${name} — you've got an appointment coming up!`,
-    opener: "You've got an appointment in 3 days.",
+  [AppointmentReminderLead.ONE_DAY]: {
+    subject: (name) => `Psst, ${name} — you've got an appointment tomorrow!`,
+    opener: "You've got an appointment tomorrow.",
     prep: true,
   },
   [AppointmentReminderLead.ONE_HOUR]: {
@@ -60,6 +60,13 @@ export class SendAppointmentReminderProcessor {
 
     for (const target of job.data.targets) {
       const copy = APPOINTMENT_REMINDER_COPY[target.lead];
+      // A job enqueued just before a deploy that changed the lead set carries a lead
+      // this build no longer knows. Skip it rather than throwing — one stale target
+      // must not fail the whole batch of up to 200 reminders behind it.
+      if (!copy) {
+        this.logger.warn(`Skipping appointment reminder with unknown lead=${target.lead}`);
+        continue;
+      }
 
       try {
         await this.mailService.send(target.email, copy.subject(target.firstName), {

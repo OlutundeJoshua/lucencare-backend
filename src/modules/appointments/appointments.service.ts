@@ -11,7 +11,11 @@ import {
   AppointmentStatus,
 } from 'src/common/enums';
 import { APPOINTMENT_REMINDER_LEAD_MINUTES } from 'src/common/constants/appointment-reminder-leads';
-import { MAIL_JOB_OPTIONS, MAIL_QUEUE, SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
+import {
+  MAIL_JOB_OPTIONS,
+  MAIL_QUEUE,
+  SEND_APPOINTMENT_CONFIRMATION_JOB,
+} from 'src/queues/queues.constants';
 import { SendAppointmentConfirmationJob } from 'src/queues/interfaces/send-appointment-confirmation-job.interface';
 import { firstName } from 'src/common/utils/first-name.util';
 import { minutesUntilScheduled, nowInTimezone } from 'src/common/utils/time-label.util';
@@ -33,7 +37,10 @@ const DEFAULT_APPOINTMENT_REMINDER_WINDOW_MINUTES = 5;
  * longest lead so the three-day reminder is always in range, and bounded so the query
  * never widens into the patient's entire appointment history.
  */
-const REMINDER_SCAN_HORIZON_DAYS = 5;
+// Two days: the furthest lead is one day (APPOINTMENT_REMINDER_LEAD_MINUTES), plus a
+// day of margin so no timezone can push an appointment out of range. Every row
+// selected past that is discarded by the per-patient window check below.
+const REMINDER_SCAN_HORIZON_DAYS = 2;
 
 @Injectable()
 export class AppointmentsService {
@@ -87,7 +94,11 @@ export class AppointmentsService {
     return saved;
   }
 
-  async updateAppointment(userId: string, id: string, dto: UpdateAppointmentDto): Promise<Appointment> {
+  async updateAppointment(
+    userId: string,
+    id: string,
+    dto: UpdateAppointmentDto,
+  ): Promise<Appointment> {
     const appointment = await this.getOwnedAppointment(userId, id);
 
     const updates: Partial<Appointment> = {};
@@ -145,7 +156,10 @@ export class AppointmentsService {
       throw new ConflictException(`Appointment is already ${appointment.status}`);
     }
 
-    await this.appointmentRepo.update({ id: appointment.id }, { status: AppointmentStatus.CANCELLED });
+    await this.appointmentRepo.update(
+      { id: appointment.id },
+      { status: AppointmentStatus.CANCELLED },
+    );
 
     return this.getOwnedAppointmentForPatient(patient.id, id);
   }

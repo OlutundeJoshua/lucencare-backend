@@ -10,7 +10,11 @@ import {
   AppointmentStatus,
   AppointmentType,
 } from 'src/common/enums';
-import { MAIL_JOB_OPTIONS, MAIL_QUEUE, SEND_APPOINTMENT_CONFIRMATION_JOB } from 'src/queues/queues.constants';
+import {
+  MAIL_JOB_OPTIONS,
+  MAIL_QUEUE,
+  SEND_APPOINTMENT_CONFIRMATION_JOB,
+} from 'src/queues/queues.constants';
 import { PatientsService } from 'src/modules/patients/patients.service';
 import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { User } from 'src/modules/auth/entities/user.entity';
@@ -78,7 +82,9 @@ describe('AppointmentsService', () => {
     patientsService = { getMyProfile: jest.fn().mockResolvedValue(mockPatient) };
     // Matches the default tick cadence of */5. See the COUPLED PAIR note in app.config.ts.
     configService = {
-      get: jest.fn((key: string) => (key === 'app.appointmentReminderWindowMinutes' ? 5 : undefined)),
+      get: jest.fn((key: string) =>
+        key === 'app.appointmentReminderWindowMinutes' ? 5 : undefined,
+      ),
     };
     mailQueue = { add: jest.fn().mockResolvedValue(undefined) };
 
@@ -164,7 +170,10 @@ describe('AppointmentsService', () => {
 
   describe('rescheduleAppointment', () => {
     it('resets status to CONFIRMED and re-sends the confirmation email', async () => {
-      appointmentRepo.findOne.mockResolvedValue({ ...mockAppointment, status: AppointmentStatus.PENDING });
+      appointmentRepo.findOne.mockResolvedValue({
+        ...mockAppointment,
+        status: AppointmentStatus.PENDING,
+      });
 
       await service.rescheduleAppointment(USER_ID, APPOINTMENT_ID, {
         appointmentDate: '2026-08-10',
@@ -174,7 +183,10 @@ describe('AppointmentsService', () => {
 
       expect(appointmentRepo.update).toHaveBeenCalledWith(
         { id: APPOINTMENT_ID },
-        expect.objectContaining({ status: AppointmentStatus.CONFIRMED, appointmentDate: '2026-08-10' }),
+        expect.objectContaining({
+          status: AppointmentStatus.CONFIRMED,
+          appointmentDate: '2026-08-10',
+        }),
       );
       expect(mailQueue.add).toHaveBeenCalledWith(
         SEND_APPOINTMENT_CONFIRMATION_JOB,
@@ -184,7 +196,10 @@ describe('AppointmentsService', () => {
     });
 
     it('throws ConflictException when the appointment is already cancelled', async () => {
-      appointmentRepo.findOne.mockResolvedValue({ ...mockAppointment, status: AppointmentStatus.CANCELLED });
+      appointmentRepo.findOne.mockResolvedValue({
+        ...mockAppointment,
+        status: AppointmentStatus.CANCELLED,
+      });
 
       await expect(
         service.rescheduleAppointment(USER_ID, APPOINTMENT_ID, {
@@ -209,15 +224,22 @@ describe('AppointmentsService', () => {
     });
 
     it('throws ConflictException when already completed', async () => {
-      appointmentRepo.findOne.mockResolvedValue({ ...mockAppointment, status: AppointmentStatus.COMPLETED });
+      appointmentRepo.findOne.mockResolvedValue({
+        ...mockAppointment,
+        status: AppointmentStatus.COMPLETED,
+      });
 
-      await expect(service.cancelAppointment(USER_ID, APPOINTMENT_ID)).rejects.toThrow(ConflictException);
+      await expect(service.cancelAppointment(USER_ID, APPOINTMENT_ID)).rejects.toThrow(
+        ConflictException,
+      );
     });
 
     it('throws NotFoundException when the appointment does not belong to the caller', async () => {
       appointmentRepo.findOne.mockResolvedValue(null);
 
-      await expect(service.cancelAppointment(USER_ID, APPOINTMENT_ID)).rejects.toThrow(NotFoundException);
+      await expect(service.cancelAppointment(USER_ID, APPOINTMENT_ID)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -252,17 +274,17 @@ describe('AppointmentsService', () => {
       patientRepo.find.mockResolvedValue([lagosPatient]);
     });
 
-    it('sends the three-day reminder exactly three days out', async () => {
+    it('sends the one-day reminder exactly a day out', async () => {
       arrangeScan([mockAppointment]);
 
-      // 2026-07-29 10:30 local is 72h before the 2026-08-01 10:30 appointment.
-      const targets = await service.findDueReminderTargets(new Date('2026-07-29T09:30:00.000Z'));
+      // 2026-07-31 10:30 local is 24h before the 2026-08-01 10:30 appointment.
+      const targets = await service.findDueReminderTargets(new Date('2026-07-31T09:30:00.000Z'));
 
       expect(targets).toHaveLength(1);
       expect(targets[0]).toEqual({
         email: 'jane@example.com',
         firstName: 'Jane',
-        lead: AppointmentReminderLead.THREE_DAYS,
+        lead: AppointmentReminderLead.ONE_DAY,
         appointmentType: AppointmentType.CONSULTATION,
         appointmentDate: '2026-08-01',
         time: '10:30 AM',
@@ -303,7 +325,9 @@ describe('AppointmentsService', () => {
       const oneHourHits: string[] = [];
       for (const tick of ticks) {
         const targets = await service.findDueReminderTargets(new Date(tick));
-        if (targets.some((t) => t.lead === AppointmentReminderLead.ONE_HOUR)) oneHourHits.push(tick);
+        if (targets.some((t) => t.lead === AppointmentReminderLead.ONE_HOUR)) {
+          oneHourHits.push(tick);
+        }
       }
 
       expect(oneHourHits).toEqual(['2026-08-01T08:30:00.000Z']);

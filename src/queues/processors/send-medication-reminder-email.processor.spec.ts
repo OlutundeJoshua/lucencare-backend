@@ -3,6 +3,7 @@ import { Job } from 'bullmq';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 
+import { MedicationReminderLead } from 'src/common/enums';
 import { SEND_MEDICATION_REMINDER_EMAIL_JOB } from 'src/queues/queues.constants';
 import { MailService } from 'src/modules/mail/mail.service';
 import { renderEmailText } from 'src/modules/mail/email-text.util';
@@ -14,9 +15,9 @@ function target(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     email: 'a@example.com',
     firstName: 'Ada',
-    medicationName: 'Amlodipine',
-    dosage: '5mg',
+    lead: MedicationReminderLead.AT_TIME,
     scheduledTime: '8:00 AM',
+    medications: [{ name: 'Amlodipine', dosage: '5mg' }],
     streakDays: 4,
     ...overrides,
   };
@@ -71,8 +72,7 @@ describe('SendMedicationReminderEmailProcessor', () => {
           target({
             email: 'b@example.com',
             firstName: 'Grace',
-            medicationName: 'Metformin',
-            dosage: '500mg',
+            medications: [{ name: 'Metformin', dosage: '500mg' }],
           }),
         ],
       },
@@ -136,8 +136,11 @@ describe('SendMedicationReminderEmailProcessor', () => {
       data: {
         targets: [
           target({ email: 'bad@example.com' }),
-          target({ email: 'b@example.com', medicationName: 'Metformin' }),
-          target({ email: 'c@example.com', medicationName: 'Lisinopril' }),
+          target({ email: 'b@example.com', medications: [{ name: 'Metformin', dosage: '500mg' }] }),
+          target({
+            email: 'c@example.com',
+            medications: [{ name: 'Lisinopril', dosage: '10mg' }],
+          }),
         ],
       },
     } as Job<SendMedicationReminderEmailJob>;
@@ -147,6 +150,82 @@ describe('SendMedicationReminderEmailProcessor', () => {
     expect(mailService.send).toHaveBeenCalledTimes(3);
     expect(mailService.send.mock.calls[1][0]).toBe('b@example.com');
     expect(mailService.send.mock.calls[2][0]).toBe('c@example.com');
+  });
+
+  describe('per-lead copy', () => {
+    it('uses the thirty-minute copy for the thirty-minute lead', async () => {
+      await processor.process({
+        name: SEND_MEDICATION_REMINDER_EMAIL_JOB,
+        data: { targets: [target({ lead: MedicationReminderLead.THIRTY_MINUTES })] },
+      } as Job<SendMedicationReminderEmailJob>);
+
+      const [, subject, body] = sent();
+      expect(subject).toBe('Ada, Amlodipine in 30 minutes');
+      expect(body).toContain('coming up in 30 minutes');
+      expect(body).toContain('Scheduled for 8:00 AM.');
+    });
+
+    it('keeps the original at-time subject for a single medication', async () => {
+      await processor.process({
+        name: SEND_MEDICATION_REMINDER_EMAIL_JOB,
+        data: { targets: [target()] },
+      } as Job<SendMedicationReminderEmailJob>);
+
+      const [, subject, body] = sent();
+      expect(subject).toBe("Ada, it's Amlodipine o'clock");
+      expect(body).toContain("Ding ding! It's time for:");
+    });
+  });
+
+  describe('grouped medications', () => {
+    const three = [
+      { name: 'Metformin', dosage: '500mg' },
+      { name: 'Lisinopril', dosage: '10mg' },
+      { name: 'Atorvastatin', dosage: '20mg' },
+    ];
+
+    // The whole point of grouping: one email for the slot, not one per medication.
+    it('sends a single email listing every medication due in the slot', async () => {
+      await processor.process({
+        name: SEND_MEDICATION_REMINDER_EMAIL_JOB,
+        data: { targets: [target({ medications: three })] },
+      } as Job<SendMedicationReminderEmailJob>);
+
+      expect(mailService.send).toHaveBeenCalledTimes(1);
+      const [, subject, body] = sent();
+      expect(subject).toBe('Ada, 3 medications due now');
+      expect(body).toContain('- Metformin — 500mg');
+      expect(body).toContain('- Lisinopril — 10mg');
+      expect(body).toContain('- Atorvastatin — 20mg');
+    });
+
+    it('counts the medications in the thirty-minute subject too', async () => {
+      await processor.process({
+        name: SEND_MEDICATION_REMINDER_EMAIL_JOB,
+        data: {
+          targets: [target({ lead: MedicationReminderLead.THIRTY_MINUTES, medications: three })],
+        },
+      } as Job<SendMedicationReminderEmailJob>);
+
+      expect(sent()[1]).toBe('Ada, 3 medications in 30 minutes');
+    });
+  });
+
+  // A job enqueued just before a deploy that changed the lead set carries a lead this
+  // build no longer knows. It must not take the rest of the batch down with it.
+  it('skips a target whose lead this build no longer knows, and sends the rest', async () => {
+    await processor.process({
+      name: SEND_MEDICATION_REMINDER_EMAIL_JOB,
+      data: {
+        targets: [
+          target({ email: 'stale@example.com', lead: 'one_hour' }),
+          target({ email: 'ok@example.com' }),
+        ],
+      },
+    } as unknown as Job<SendMedicationReminderEmailJob>);
+
+    expect(mailService.send).toHaveBeenCalledTimes(1);
+    expect(mailService.send.mock.calls[0][0]).toBe('ok@example.com');
   });
 
   it('does nothing for a non-matching job name', async () => {

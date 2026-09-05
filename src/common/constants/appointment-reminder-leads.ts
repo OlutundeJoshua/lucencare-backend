@@ -13,7 +13,7 @@ import { AppointmentReminderLead } from 'src/common/enums';
  * would send two copies of the same email.
  */
 export const APPOINTMENT_REMINDER_LEAD_MINUTES: Record<AppointmentReminderLead, number> = {
-  [AppointmentReminderLead.THREE_DAYS]: 3 * 24 * 60,
+  [AppointmentReminderLead.ONE_DAY]: 24 * 60,
   [AppointmentReminderLead.ONE_HOUR]: 60,
   [AppointmentReminderLead.AT_TIME]: 0,
 };

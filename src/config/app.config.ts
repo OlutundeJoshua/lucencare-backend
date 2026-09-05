@@ -34,13 +34,18 @@ export default registerAs('app', () => ({
   otpTtlSeconds: parseInt(process.env.OTP_TTL_SECONDS ?? '300', 10),
   bcryptSaltRounds: parseInt(process.env.BCRYPT_SALT_ROUNDS ?? '12', 10),
 
-  // COUPLED PAIR — keep these consistent. Each tick claims the doses scheduled in
-  // the next `window` minutes, so the window must be >= the tick interval or doses
-  // falling between two ticks are never reminded. Making it larger instead sends a
-  // dose's reminder on more than one tick. Default: tick every 30 min, window 30 min.
-  medicationReminderTickCron: process.env.MEDICATION_REMINDER_TICK_CRON ?? '*/30 * * * *',
+  // COUPLED PAIR — same rule as the appointment reminder below, and for the same
+  // reason: each tick claims the doses falling in the next `window` minutes at each
+  // lead in MEDICATION_REMINDER_LEAD_MINUTES, so window must EQUAL the tick interval.
+  // Smaller and doses between two ticks are never reminded; larger and the same dose
+  // is reminded on more than one tick.
+  //
+  // 5 minutes rather than 30 because the leads are 30 minutes and 0: a 30-minute
+  // window would make "30 minutes before" mean anywhere from 30 to 60, and would let
+  // one tick match both leads at once for the same dose.
+  medicationReminderTickCron: process.env.MEDICATION_REMINDER_TICK_CRON ?? '*/5 * * * *',
   medicationReminderWindowMinutes: parseInt(
-    process.env.MEDICATION_REMINDER_WINDOW_MINUTES ?? '30',
+    process.env.MEDICATION_REMINDER_WINDOW_MINUTES ?? '5',
     10,
   ),
 

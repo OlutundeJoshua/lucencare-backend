@@ -21,6 +21,7 @@ import {
   AppointmentConfirmationAction,
   AppointmentReminderLead,
   EnrollmentStatus,
+  MedicationReminderLead,
 } from 'src/common/enums';
 import {
   SEND_APPLICATION_STATUS_JOB,
@@ -221,23 +222,43 @@ async function collect(): Promise<void> {
     );
   }
 
-  for (const streakDays of [12, 0]) {
-    await capture(`reminder-medication-${streakDays > 0 ? 'streak' : 'no-streak'}`, () =>
-      new SendMedicationReminderEmailProcessor(mail, configService).process(
-        job(SEND_MEDICATION_REMINDER_EMAIL_JOB, {
-          targets: [
-            {
-              email: 'ada@example.com',
-              firstName: 'Ada',
-              medicationName: 'Metformin',
-              dosage: '500mg, one tablet',
-              scheduledTime: '08:00',
-              streakDays,
-            },
-          ],
-        }),
-      ),
-    );
+  // One medication and several, at both leads — the four shapes the copy branches on.
+  const MED_VARIANTS = [
+    {
+      slug: 'single',
+      medications: [{ name: 'Metformin', dosage: '500mg, one tablet' }],
+      streakDays: 12,
+    },
+    {
+      slug: 'multiple',
+      medications: [
+        { name: 'Metformin', dosage: '500mg, one tablet' },
+        { name: 'Lisinopril', dosage: '10mg, one tablet' },
+        { name: 'Atorvastatin', dosage: '20mg, one tablet' },
+      ],
+      streakDays: 0,
+    },
+  ];
+
+  for (const lead of Object.values(MedicationReminderLead)) {
+    for (const variant of MED_VARIANTS) {
+      await capture(`reminder-medication-${lead}-${variant.slug}`, () =>
+        new SendMedicationReminderEmailProcessor(mail, configService).process(
+          job(SEND_MEDICATION_REMINDER_EMAIL_JOB, {
+            targets: [
+              {
+                email: 'ada@example.com',
+                firstName: 'Ada',
+                lead,
+                scheduledTime: '8:00 AM',
+                medications: variant.medications,
+                streakDays: variant.streakDays,
+              },
+            ],
+          }),
+        ),
+      );
+    }
   }
 }
 

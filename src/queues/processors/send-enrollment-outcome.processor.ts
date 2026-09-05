@@ -18,13 +18,13 @@ const OUTCOME_COPY: Record<
 > = {
   [EnrollmentStatus.SELECTED]: {
     subject: (p) => `You have been selected for ${p}`,
-    lead: (p) => `Good news — you have been selected for ${p}.`,
+    lead: (p) => `Good news, you have been selected for ${p}.`,
     next: 'The programme coordinator will be in touch with next steps. You can see this on your Funding page at any time.',
   },
   [EnrollmentStatus.WAITLISTED]: {
     subject: (p) => `You are on the waiting list for ${p}`,
     lead: (p) => `You have been placed on the waiting list for ${p}.`,
-    next: 'If a place becomes available you will be contacted. Your application stays open — there is nothing else you need to do.',
+    next: 'If a place becomes available you will be contacted.',
   },
   [EnrollmentStatus.REJECTED]: {
     subject: (p) => `Your application to ${p} was not successful`,

@@ -333,9 +333,65 @@ export class MatchingService {
         const matches =
           operator === 'in' ? expected.includes(actual) : actual === (value as string);
         if (!matches) return false;
+      } else {
+        // Everything else buildCriteriaWhere maps to a plain column — gender,
+        // dateOfBirth, membershipNumber. Until this branch existed those fell
+        // through the loop without returning false, so a programme scoped to one
+        // gender was recommended to every consenting patient, while the NGO's own
+        // eligible-count (which goes through the SQL path) applied the filter and
+        // disagreed.
+        //
+        // A field with no column mapping is skipped in SQL, so it is skipped here
+        // too: the two paths have to agree even about criteria neither can apply.
+        if (!this.fieldToColumn(field)) continue;
+
+        const actual = this.patientValueFor(patient, field);
+        // No value recorded cannot satisfy a filter, matching the SQL semantics
+        // where NULL fails every comparison.
+        if (actual == null) return false;
+        if (!this.scalarMatches(actual, operator, value)) return false;
       }
     }
     return true;
+  }
+
+  /** The patient-side counterpart of fieldToColumn, for the JS matching path. */
+  private patientValueFor(patient: Patient, field: string): string | undefined {
+    switch (field) {
+      case 'gender':
+        return patient.gender;
+      case 'dateOfBirth':
+        return patient.dateOfBirth;
+      case 'membershipNumber':
+        return patient.membershipNumber;
+      default:
+        return undefined;
+    }
+  }
+
+  /**
+   * Mirrors the operator switch in buildCriteriaWhere.
+   *
+   * String comparison is correct for every column reaching this point: gender and
+   * membershipNumber are compared for equality, and date_of_birth is a Postgres
+   * `date` that TypeORM hands back as YYYY-MM-DD, which orders lexicographically
+   * exactly as it does chronologically.
+   */
+  private scalarMatches(actual: string, operator: string, value: unknown): boolean {
+    switch (operator) {
+      case 'eq':
+        return actual === value;
+      case 'gte':
+        return actual >= String(value);
+      case 'lte':
+        return actual <= String(value);
+      case 'in':
+        return (Array.isArray(value) ? value : [value]).includes(actual);
+      case 'contains':
+        return actual.includes(String(value));
+      default:
+        return false;
+    }
   }
 
   private async resolvePatientId(userId: string): Promise<string> {

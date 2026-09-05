@@ -303,18 +303,22 @@ export class ProgramsService {
   ): Promise<{ programs: ProgramView[]; nextCursor?: string }> {
     const limit = query.limit ?? 20;
 
+    // Newest first. ULIDs carry their creation time in the leading bits and sort
+    // lexicographically by it, so ordering on the primary key is ordering by age —
+    // no created_at sort and no extra index. Keyset pagination still holds; the
+    // cursor comparison just runs the other way (CLAUDE.md 5.6).
     const qb = this.programRepo
       .createQueryBuilder('p')
       .where('p.org_id = :orgId', { orgId })
       .andWhere('p.deleted_at IS NULL')
-      .orderBy('p.id', 'ASC')
+      .orderBy('p.id', 'DESC')
       .take(limit + 1);
 
     if (query.status) {
       qb.andWhere('p.status = :status', { status: query.status });
     }
     if (query.cursor) {
-      qb.andWhere('p.id > :cursor', { cursor: query.cursor });
+      qb.andWhere('p.id < :cursor', { cursor: query.cursor });
     }
 
     const rows = await qb.getMany();

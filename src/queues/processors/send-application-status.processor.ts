@@ -92,7 +92,7 @@ export class SendApplicationStatusProcessor {
               },
               {
                 kind: 'paragraph',
-                text: "You'll receive an email as soon as a decision has been made. There is nothing else you need to do for now.",
+                text: "You'll receive an email as soon as a decision has been made.",
               },
               { kind: 'signoff', text: 'The LucenCare Team' },
             ],
@@ -111,7 +111,7 @@ export class SendApplicationStatusProcessor {
               // (application, programme, enrolment), so they read alike.
               {
                 kind: 'callout',
-                text: `Good news — your ${label} application has been approved and your account is now active.`,
+                text: `Good news, your ${label} application has been approved and your account is now active.`,
               },
               { kind: 'list', lead: 'You can now:', items: capabilities },
               {

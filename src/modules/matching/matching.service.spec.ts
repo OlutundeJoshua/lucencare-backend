@@ -380,6 +380,96 @@ describe('MatchingService', () => {
         expect(result.data).toHaveLength(0);
       });
     });
+
+    // The same disagreement location used to have: buildCriteriaWhere maps both of
+    // these to real columns, but the JS filter had no branch for them, so it let
+    // every patient through while the NGO's eligible-count applied the filter.
+    describe('scalar column criteria, evaluated in JS', () => {
+      function withCriterion(criterion: EligibilityCriterion, patient: Patient) {
+        mockPatientRepo.createQueryBuilder.mockReturnValue(buildQbChain([patient], patient));
+        mockPatientRepo.findOne.mockResolvedValue(patient);
+        mockProgramRepo.createQueryBuilder.mockReturnValue(
+          buildQbChain([makeProgram({ eligibilityCriteria: [criterion] })]),
+        );
+      }
+
+      const female: EligibilityCriterion = { field: 'gender', operator: 'eq', value: 'female' };
+
+      it('matches a patient of the specified gender', async () => {
+        withCriterion(female, makePatient({ gender: 'female' } as Partial<Patient>));
+
+        const result = await service.findMatchingPrograms(userId, { limit: 20 });
+
+        expect(result.data).toHaveLength(1);
+      });
+
+      it('excludes a patient of a different gender', async () => {
+        withCriterion(female, makePatient({ gender: 'male' } as Partial<Patient>));
+
+        const result = await service.findMatchingPrograms(userId, { limit: 20 });
+
+        expect(result.data).toHaveLength(0);
+      });
+
+      it('excludes a patient with no gender recorded', async () => {
+        withCriterion(female, makePatient({ gender: undefined }));
+
+        const result = await service.findMatchingPrograms(userId, { limit: 20 });
+
+        expect(result.data).toHaveLength(0);
+      });
+
+      // date_of_birth is a Postgres `date`, handed back as YYYY-MM-DD, so the
+      // comparison is a string one — and has to order the same way SQL does.
+      it('applies gte to a date of birth', async () => {
+        const bornAfter2000: EligibilityCriterion = {
+          field: 'dateOfBirth',
+          operator: 'gte',
+          value: '2000-01-01',
+        };
+
+        withCriterion(bornAfter2000, makePatient({ dateOfBirth: '2004-06-15' }));
+        await expect(
+          service.findMatchingPrograms(userId, { limit: 20 }).then(r => r.data.length),
+        ).resolves.toBe(1);
+
+        withCriterion(bornAfter2000, makePatient({ dateOfBirth: '1985-03-02' }));
+        await expect(
+          service.findMatchingPrograms(userId, { limit: 20 }).then(r => r.data.length),
+        ).resolves.toBe(0);
+      });
+
+      it('applies lte to a date of birth', async () => {
+        const bornBefore2000: EligibilityCriterion = {
+          field: 'dateOfBirth',
+          operator: 'lte',
+          value: '2000-01-01',
+        };
+
+        withCriterion(bornBefore2000, makePatient({ dateOfBirth: '1985-03-02' }));
+        await expect(
+          service.findMatchingPrograms(userId, { limit: 20 }).then(r => r.data.length),
+        ).resolves.toBe(1);
+
+        withCriterion(bornBefore2000, makePatient({ dateOfBirth: '2010-03-02' }));
+        await expect(
+          service.findMatchingPrograms(userId, { limit: 20 }).then(r => r.data.length),
+        ).resolves.toBe(0);
+      });
+
+      // fieldToColumn returns null for this, so buildCriteriaWhere skips it. The
+      // JS path must skip it too rather than failing everyone.
+      it('ignores a criterion on a field with no column mapping', async () => {
+        withCriterion(
+          { field: 'favouriteColour', operator: 'eq', value: 'blue' },
+          makePatient(),
+        );
+
+        const result = await service.findMatchingPrograms(userId, { limit: 20 });
+
+        expect(result.data).toHaveLength(1);
+      });
+    });
   });
 
   // ── findStudies ────────────────────────────────────────────────────────────

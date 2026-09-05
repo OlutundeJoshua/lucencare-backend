@@ -28,7 +28,7 @@ export class SendPatientOnboardingWelcomeProcessor {
         { kind: 'paragraph', text: "Welcome to LucenCare. We're really glad you're here." },
         {
           kind: 'paragraph',
-          text: "Whether you're managing a chronic condition yourself, or supporting someone you love through one, LucenCare is built to make the journey lighter. Here's what you can do right away:",
+          text: "Whether you're managing a chronic or long-term health condition(s) and treatments yourself, or supporting someone you love through one, LucenCare is built to make the journey lighter. Here's what you can do right away:",
         },
         {
           kind: 'list',

@@ -265,9 +265,9 @@ describe('ProgramsService', () => {
     it('throws UnprocessableEntityException when expiresAt is in the past', async () => {
       mockOrgRepo.findOne.mockResolvedValue(makeOrg());
 
-      await expect(
-        service.create(ORG_ID, { ...dto, expiresAt: PAST_DATE }),
-      ).rejects.toThrow(UnprocessableEntityException);
+      await expect(service.create(ORG_ID, { ...dto, expiresAt: PAST_DATE })).rejects.toThrow(
+        UnprocessableEntityException,
+      );
     });
   });
 
@@ -307,12 +307,23 @@ describe('ProgramsService', () => {
       });
     });
 
+    // Newest first, and ULIDs sort by creation time — so paging forward walks the
+    // ids downward and the keyset comparison runs the opposite way to an ascending
+    // list. Getting this backwards returns the first page forever.
+    it('orders newest first', async () => {
+      mockProgramQb.getMany.mockResolvedValue([]);
+
+      await service.findByOrg(ORG_ID, {} as ListProgramsDto);
+
+      expect(mockProgramQb.orderBy).toHaveBeenCalledWith('p.id', 'DESC');
+    });
+
     it('applies cursor filter when provided', async () => {
       mockProgramQb.getMany.mockResolvedValue([]);
 
       await service.findByOrg(ORG_ID, { cursor: PROGRAM_ID } as ListProgramsDto);
 
-      expect(mockProgramQb.andWhere).toHaveBeenCalledWith('p.id > :cursor', {
+      expect(mockProgramQb.andWhere).toHaveBeenCalledWith('p.id < :cursor', {
         cursor: PROGRAM_ID,
       });
     });
@@ -350,9 +361,9 @@ describe('ProgramsService', () => {
     it('throws ForbiddenException when orgId does not match', async () => {
       mockProgramRepo.findOne.mockResolvedValue(makeProgram());
 
-      await expect(
-        service.findByIdForOrg(PROGRAM_ID, 'DIFFERENT_ORG_ZZZZZZZZZ'),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.findByIdForOrg(PROGRAM_ID, 'DIFFERENT_ORG_ZZZZZZZZZ')).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 
@@ -375,9 +386,9 @@ describe('ProgramsService', () => {
     it('throws ForbiddenException when program belongs to different org', async () => {
       mockProgramRepo.findOne.mockResolvedValue(makeProgram());
 
-      await expect(
-        service.getMatchPreview(PROGRAM_ID, 'OTHER_ORG_ZZZZZZZZZZZZ'),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.getMatchPreview(PROGRAM_ID, 'OTHER_ORG_ZZZZZZZZZZZZ')).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('throws NotFoundException when program not found', async () => {
@@ -465,10 +476,10 @@ describe('ProgramsService', () => {
 
       await service.triggerFanOut(PROGRAM_ID, ORG_ID);
 
-      expect(mockNotificationsQueue.add).toHaveBeenCalledWith(
-        'fan_out_notify',
-        { programId: PROGRAM_ID, orgId: ORG_ID },
-      );
+      expect(mockNotificationsQueue.add).toHaveBeenCalledWith('fan_out_notify', {
+        programId: PROGRAM_ID,
+        orgId: ORG_ID,
+      });
     });
 
     it('throws ConflictException when program is pending review', async () => {
@@ -637,9 +648,7 @@ describe('ProgramsService', () => {
     });
 
     it('never reports negative places remaining', async () => {
-      mockProgramRepo.findOne.mockResolvedValue(
-        makeProgram({ slotsTotal: 5, slotsFilled: 9 }),
-      );
+      mockProgramRepo.findOne.mockResolvedValue(makeProgram({ slotsTotal: 5, slotsFilled: 9 }));
       const view = await service.getForOrg(PROGRAM_ID, ORG_ID);
       expect(view.slotsAvailable).toBe(0);
     });
@@ -703,18 +712,17 @@ describe('ProgramsService', () => {
       );
     });
 
-    it.each([
-      [ProgramStatus.PENDING_REVIEW],
-      [ProgramStatus.APPROVED],
-      [ProgramStatus.EXPIRED],
-    ])('409s when the programme is already %s', async (status) => {
-      pending({ status });
+    it.each([[ProgramStatus.PENDING_REVIEW], [ProgramStatus.APPROVED], [ProgramStatus.EXPIRED]])(
+      '409s when the programme is already %s',
+      async (status) => {
+        pending({ status });
 
-      await expect(service.submitForReview(PROGRAM_ID, ORG_ID, ACTOR)).rejects.toBeInstanceOf(
-        ConflictException,
-      );
-      expect(mockProgramRepo.update).not.toHaveBeenCalled();
-    });
+        await expect(service.submitForReview(PROGRAM_ID, ORG_ID, ACTOR)).rejects.toBeInstanceOf(
+          ConflictException,
+        );
+        expect(mockProgramRepo.update).not.toHaveBeenCalled();
+      },
+    );
 
     it('refuses to submit something already past its closing date', async () => {
       pending({ expiresAt: new Date(Date.now() - 86_400_000) });
@@ -832,7 +840,9 @@ describe('ProgramsService', () => {
         rawRow({ id: 'P3' }),
       ]);
 
-      const { programs, nextCursor } = await service.browseForPatient({ limit: 2 } as PaginationDto);
+      const { programs, nextCursor } = await service.browseForPatient({
+        limit: 2,
+      } as PaginationDto);
 
       expect(programs).toHaveLength(2);
       expect(nextCursor).toBe('P2');
@@ -900,7 +910,9 @@ describe('ProgramsService', () => {
         rawRow({ id: 'P1' }),
       ]);
 
-      const { programs, nextCursor } = await service.findAllForAdmin({ limit: 2 } as ListProgramsDto);
+      const { programs, nextCursor } = await service.findAllForAdmin({
+        limit: 2,
+      } as ListProgramsDto);
 
       expect(mockProgramQb.orderBy).toHaveBeenCalledWith('p.id', 'DESC');
       expect(programs).toHaveLength(2);
@@ -960,17 +972,15 @@ describe('ProgramsService', () => {
     it('refuses to cut capacity below places already filled', async () => {
       existing({ slotsTotal: 50, slotsFilled: 30 });
 
-      await expect(
-        service.update(PROGRAM_ID, ORG_ID, { slotsTotal: 10 }),
-      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(service.update(PROGRAM_ID, ORG_ID, { slotsTotal: 10 })).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
       expect(mockProgramRepo.update).not.toHaveBeenCalled();
     });
 
     it('allows cutting capacity down to exactly what is filled', async () => {
       existing({ slotsTotal: 50, slotsFilled: 30 });
-      await expect(
-        service.update(PROGRAM_ID, ORG_ID, { slotsTotal: 30 }),
-      ).resolves.toBeDefined();
+      await expect(service.update(PROGRAM_ID, ORG_ID, { slotsTotal: 30 })).resolves.toBeDefined();
     });
 
     it('refuses to cut the budget below what is already disbursed', async () => {
@@ -988,7 +998,7 @@ describe('ProgramsService', () => {
       ).rejects.toBeInstanceOf(UnprocessableEntityException);
     });
 
-    it('403s on another organisation\'s programme, before writing anything', async () => {
+    it("403s on another organisation's programme, before writing anything", async () => {
       mockProgramRepo.findOne.mockResolvedValue(makeProgram({ orgId: 'OTHERORG' }));
 
       await expect(
@@ -1000,9 +1010,9 @@ describe('ProgramsService', () => {
     it('404s on a programme that does not exist', async () => {
       mockProgramRepo.findOne.mockResolvedValue(null);
 
-      await expect(
-        service.update(PROGRAM_ID, ORG_ID, { title: 'Ghost' }),
-      ).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.update(PROGRAM_ID, ORG_ID, { title: 'Ghost' })).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
 
     it('skips the write entirely for an empty patch', async () => {
@@ -1031,9 +1041,7 @@ describe('ProgramsService', () => {
       existing();
       mockAuditService.log.mockRejectedValueOnce(new Error('db down'));
 
-      await expect(
-        service.update(PROGRAM_ID, ORG_ID, { title: 'Renamed' }),
-      ).resolves.toBeDefined();
+      await expect(service.update(PROGRAM_ID, ORG_ID, { title: 'Renamed' })).resolves.toBeDefined();
     });
 
     it('lets a draft change who qualifies', async () => {
@@ -1056,7 +1064,10 @@ describe('ProgramsService', () => {
         ['budgetTotal', { budgetTotal: 5_000_000 }],
         ['slotsTotal', { slotsTotal: 99 }],
         ['description', { description: 'Rewritten' }],
-        ['eligibilityCriteria', { eligibilityCriteria: [{ field: 'gender', operator: 'eq' as const, value: 'female' }] }],
+        [
+          'eligibilityCriteria',
+          { eligibilityCriteria: [{ field: 'gender', operator: 'eq' as const, value: 'female' }] },
+        ],
       ])('refuses to change %s', async (_field, dto) => {
         approved();
 
@@ -1095,9 +1106,9 @@ describe('ProgramsService', () => {
     it('refuses to edit an expired programme at all', async () => {
       existing({ status: ProgramStatus.EXPIRED });
 
-      await expect(
-        service.update(PROGRAM_ID, ORG_ID, { title: 'Renamed' }),
-      ).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.update(PROGRAM_ID, ORG_ID, { title: 'Renamed' })).rejects.toBeInstanceOf(
+        ConflictException,
+      );
     });
   });
   // Slot accounting is the substantive part: SELECTED occupies a place, everything
@@ -1111,7 +1122,12 @@ describe('ProgramsService', () => {
       enrollmentStatus = EnrollmentStatus.ACTIVE,
     ) {
       mockProgramRepo.findOne.mockResolvedValue(
-        makeProgram({ status: ProgramStatus.APPROVED, slotsTotal: 50, slotsFilled: 10, ...programOverrides }),
+        makeProgram({
+          status: ProgramStatus.APPROVED,
+          slotsTotal: 50,
+          slotsFilled: 10,
+          ...programOverrides,
+        }),
       );
       mockEnrollmentRepo.findOne.mockResolvedValue({
         id: ENR_ID,
@@ -1361,9 +1377,7 @@ describe('ProgramsService', () => {
         { state: 'Lagos', selected: '8', inReview: '3', waitlisted: '1', total: '12' },
         { state: 'Unspecified', selected: '1', inReview: '2', waitlisted: '0', total: '3' },
       ]);
-      mockEnrollmentRepo.query.mockResolvedValue([
-        { state: 'Lagos', tag: 'Hypertension' },
-      ]);
+      mockEnrollmentRepo.query.mockResolvedValue([{ state: 'Lagos', tag: 'Hypertension' }]);
     });
 
     it('returns per-state counts as numbers, with the top condition attached', async () => {

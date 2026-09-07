@@ -37,7 +37,9 @@ export class ApplicationReviewProcessor {
     });
 
     if (admins.length === 0) {
-      this.logger.warn(`No platform admins to notify about application ${applicationId} pending review`);
+      this.logger.warn(
+        `No platform admins to notify about application ${applicationId} pending review`,
+      );
       return;
     }
 

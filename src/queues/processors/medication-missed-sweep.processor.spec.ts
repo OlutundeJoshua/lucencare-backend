@@ -12,12 +12,17 @@ import { MedicationMissedSweepProcessor } from './medication-missed-sweep.proces
 describe('MedicationMissedSweepProcessor', () => {
   let processor: MedicationMissedSweepProcessor;
   let medicationsService: { markOverdueDosesMissed: jest.Mock };
-  let notificationsQueue: { add: jest.Mock };
+  let notificationsQueue: Record<string, jest.Mock>;
   let configService: { get: jest.Mock };
 
   beforeEach(async () => {
     medicationsService = { markOverdueDosesMissed: jest.fn().mockResolvedValue(0) };
-    notificationsQueue = { add: jest.fn().mockResolvedValue(undefined) };
+    notificationsQueue = {
+      add: jest.fn().mockResolvedValue(undefined),
+      upsertJobScheduler: jest.fn().mockResolvedValue(undefined),
+      getRepeatableJobs: jest.fn().mockResolvedValue([]),
+      removeRepeatableByKey: jest.fn().mockResolvedValue(undefined),
+    };
     configService = { get: jest.fn((_key: string, fallback: string) => fallback) };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -40,15 +45,15 @@ describe('MedicationMissedSweepProcessor', () => {
     expect(processor).toBeDefined();
   });
 
-  // The fixed jobId is what makes re-registration idempotent across restarts —
-  // without it every boot would add another repeatable schedule.
-  it('registers itself as a repeatable job with a fixed jobId', async () => {
+  // Keyed on the job name alone. A repeatable job's own key encodes its cron pattern,
+  // so registering by pattern meant a pattern change left the old schedule firing too.
+  it('registers itself as a job scheduler keyed on the job name', async () => {
     await processor.onModuleInit();
 
-    expect(notificationsQueue.add).toHaveBeenCalledWith(
+    expect(notificationsQueue.upsertJobScheduler).toHaveBeenCalledWith(
       MEDICATION_MISSED_SWEEP_JOB,
-      {},
-      { repeat: { pattern: '*/15 * * * *' }, jobId: MEDICATION_MISSED_SWEEP_JOB },
+      { pattern: '*/15 * * * *' },
+      { name: MEDICATION_MISSED_SWEEP_JOB, data: {} },
     );
   });
 
@@ -57,10 +62,10 @@ describe('MedicationMissedSweepProcessor', () => {
 
     await processor.onModuleInit();
 
-    expect(notificationsQueue.add).toHaveBeenCalledWith(
+    expect(notificationsQueue.upsertJobScheduler).toHaveBeenCalledWith(
       MEDICATION_MISSED_SWEEP_JOB,
-      {},
-      expect.objectContaining({ repeat: { pattern: '*/5 * * * *' } }),
+      { pattern: '*/5 * * * *' },
+      { name: MEDICATION_MISSED_SWEEP_JOB, data: {} },
     );
   });
 

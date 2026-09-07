@@ -29,7 +29,8 @@
     "migration:revert": "pnpm run typeorm -- migration:revert -d src/database/data-source.ts",
     "migration:run:prod": "node ./node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js",
     "seed": "ts-node -r tsconfig-paths/register src/database/seeds/index.ts",
-    "preview:emails": "ts-node -r tsconfig-paths/register scripts/preview-emails.ts"
+    "preview:emails": "ts-node -r tsconfig-paths/register scripts/preview-emails.ts",
+    "schedulers:list": "ts-node -r tsconfig-paths/register scripts/list-schedulers.ts"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.0",

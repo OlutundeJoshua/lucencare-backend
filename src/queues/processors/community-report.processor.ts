@@ -6,10 +6,7 @@ import { Repository } from 'typeorm';
 import { NotificationType, UserRole } from 'src/common/enums';
 import { User } from 'src/modules/auth/entities/user.entity';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
-import {
-  COMMUNITY_REPORT_JOB,
-  NOTIFICATION_FAN_OUT_BATCH_SIZE,
-} from 'src/queues/queues.constants';
+import { COMMUNITY_REPORT_JOB, NOTIFICATION_FAN_OUT_BATCH_SIZE } from 'src/queues/queues.constants';
 import { CommunityReportJob } from 'src/queues/interfaces/community-report-job.interface';
 
 /**
@@ -32,7 +29,8 @@ export class CommunityReportProcessor {
   async process(job: Job<CommunityReportJob>): Promise<void> {
     if (job.name !== COMMUNITY_REPORT_JOB) return;
 
-    const { reportId, targetType, targetId, communityId, communityName, reason, excerpt } = job.data;
+    const { reportId, targetType, targetId, communityId, communityName, reason, excerpt } =
+      job.data;
 
     const admins = await this.userRepo.find({
       where: { role: UserRole.PLATFORM_ADMIN },

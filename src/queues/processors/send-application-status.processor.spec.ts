@@ -121,7 +121,7 @@ describe('SendApplicationStatusProcessor', () => {
 
       expect(subject).toContain("We've received your NGO application");
       expect(body).toContain('48 hours');
-      expect(body).toContain('nothing else you need to do');
+      expect(body).toContain("You'll receive an email as soon as a decision has been made.");
     });
   });
 

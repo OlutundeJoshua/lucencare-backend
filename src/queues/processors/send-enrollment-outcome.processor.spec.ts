@@ -74,7 +74,7 @@ describe('SendEnrollmentOutcomeProcessor', () => {
     const [, subject, body] = await run(EnrollmentStatus.WAITLISTED);
 
     expect(subject).toContain('waiting list');
-    expect(body).toContain('nothing else you need to do');
+    expect(body).toContain('If a place becomes available you will be contacted.');
   });
 
   it('includes the reason on a rejection', async () => {

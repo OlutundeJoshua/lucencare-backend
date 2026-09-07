@@ -1,9 +1,10 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job, Queue } from 'bullmq';
 
 import {
+  MAIL_JOB_OPTIONS,
   MAIL_QUEUE,
   MEDICATION_REMINDER_TICK_JOB,
   NOTIFICATIONS_QUEUE,
@@ -11,9 +12,12 @@ import {
   SEND_MEDICATION_REMINDER_EMAIL_JOB,
 } from 'src/queues/queues.constants';
 import { MedicationsService } from 'src/modules/medications/medications.service';
+import { scheduleRepeatable } from 'src/queues/schedule-repeatable.util';
 
 @Injectable()
 export class MedicationReminderTickProcessor implements OnModuleInit {
+  private readonly logger = new Logger(MedicationReminderTickProcessor.name);
+
   constructor(
     private readonly medicationsService: MedicationsService,
     private readonly configService: ConfigService,
@@ -22,14 +26,12 @@ export class MedicationReminderTickProcessor implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    const pattern = this.configService.get<string>(
-      'app.medicationReminderTickCron',
-      '*/30 * * * *',
-    );
-    await this.notificationsQueue.add(
+    const pattern = this.configService.get<string>('app.medicationReminderTickCron', '*/5 * * * *');
+    await scheduleRepeatable(
+      this.notificationsQueue,
       MEDICATION_REMINDER_TICK_JOB,
-      {},
-      { repeat: { pattern }, jobId: MEDICATION_REMINDER_TICK_JOB },
+      pattern,
+      this.logger,
     );
   }
 
@@ -38,7 +40,11 @@ export class MedicationReminderTickProcessor implements OnModuleInit {
 
     const targets = await this.medicationsService.findDueReminderTargets();
     for (const batch of chunkArray(targets, NOTIFICATION_FAN_OUT_BATCH_SIZE)) {
-      await this.mailQueue.add(SEND_MEDICATION_REMINDER_EMAIL_JOB, { targets: batch });
+      await this.mailQueue.add(
+        SEND_MEDICATION_REMINDER_EMAIL_JOB,
+        { targets: batch },
+        MAIL_JOB_OPTIONS,
+      );
     }
   }
 }

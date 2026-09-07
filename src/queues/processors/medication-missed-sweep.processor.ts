@@ -3,11 +3,9 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job, Queue } from 'bullmq';
 
-import {
-  MEDICATION_MISSED_SWEEP_JOB,
-  NOTIFICATIONS_QUEUE,
-} from 'src/queues/queues.constants';
+import { MEDICATION_MISSED_SWEEP_JOB, NOTIFICATIONS_QUEUE } from 'src/queues/queues.constants';
 import { MedicationsService } from 'src/modules/medications/medications.service';
+import { scheduleRepeatable } from 'src/queues/schedule-repeatable.util';
 
 /**
  * Persists MISSED on doses whose grace period elapsed with nothing logged. Without it a
@@ -28,14 +26,12 @@ export class MedicationMissedSweepProcessor implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    const pattern = this.configService.get<string>(
-      'app.medicationMissedSweepCron',
-      '*/15 * * * *',
-    );
-    await this.notificationsQueue.add(
+    const pattern = this.configService.get<string>('app.medicationMissedSweepCron', '*/15 * * * *');
+    await scheduleRepeatable(
+      this.notificationsQueue,
       MEDICATION_MISSED_SWEEP_JOB,
-      {},
-      { repeat: { pattern }, jobId: MEDICATION_MISSED_SWEEP_JOB },
+      pattern,
+      this.logger,
     );
   }
 

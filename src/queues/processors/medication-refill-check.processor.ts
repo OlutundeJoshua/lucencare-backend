@@ -1,5 +1,5 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Job, Queue } from 'bullmq';
 
 import { NotificationType } from 'src/common/enums';
@@ -9,10 +9,13 @@ import {
   NOTIFICATIONS_QUEUE,
 } from 'src/queues/queues.constants';
 import { MedicationsService } from 'src/modules/medications/medications.service';
+import { scheduleRepeatable } from 'src/queues/schedule-repeatable.util';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
 
 @Injectable()
 export class MedicationRefillCheckProcessor implements OnModuleInit {
+  private readonly logger = new Logger(MedicationRefillCheckProcessor.name);
+
   constructor(
     private readonly medicationsService: MedicationsService,
     private readonly notificationsService: NotificationsService,
@@ -20,10 +23,11 @@ export class MedicationRefillCheckProcessor implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await this.notificationsQueue.add(
+    await scheduleRepeatable(
+      this.notificationsQueue,
       MEDICATION_REFILL_CHECK_JOB,
-      {},
-      { repeat: { pattern: MEDICATION_REFILL_CHECK_CRON }, jobId: MEDICATION_REFILL_CHECK_JOB },
+      MEDICATION_REFILL_CHECK_CRON,
+      this.logger,
     );
   }
 

@@ -1,16 +1,18 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job, Queue } from 'bullmq';
 
 import {
   APPOINTMENT_REMINDER_TICK_JOB,
+  MAIL_JOB_OPTIONS,
   MAIL_QUEUE,
   NOTIFICATIONS_QUEUE,
   NOTIFICATION_FAN_OUT_BATCH_SIZE,
   SEND_APPOINTMENT_REMINDER_JOB,
 } from 'src/queues/queues.constants';
 import { AppointmentsService } from 'src/modules/appointments/appointments.service';
+import { scheduleRepeatable } from 'src/queues/schedule-repeatable.util';
 
 /**
  * Finds appointments coming due and fans out reminder emails, mirroring
@@ -20,6 +22,8 @@ import { AppointmentsService } from 'src/modules/appointments/appointments.servi
  */
 @Injectable()
 export class AppointmentReminderTickProcessor implements OnModuleInit {
+  private readonly logger = new Logger(AppointmentReminderTickProcessor.name);
+
   constructor(
     private readonly appointmentsService: AppointmentsService,
     private readonly configService: ConfigService,
@@ -32,10 +36,11 @@ export class AppointmentReminderTickProcessor implements OnModuleInit {
       'app.appointmentReminderTickCron',
       '*/5 * * * *',
     );
-    await this.notificationsQueue.add(
+    await scheduleRepeatable(
+      this.notificationsQueue,
       APPOINTMENT_REMINDER_TICK_JOB,
-      {},
-      { repeat: { pattern }, jobId: APPOINTMENT_REMINDER_TICK_JOB },
+      pattern,
+      this.logger,
     );
   }
 
@@ -44,7 +49,7 @@ export class AppointmentReminderTickProcessor implements OnModuleInit {
 
     const targets = await this.appointmentsService.findDueReminderTargets();
     for (const batch of chunkArray(targets, NOTIFICATION_FAN_OUT_BATCH_SIZE)) {
-      await this.mailQueue.add(SEND_APPOINTMENT_REMINDER_JOB, { targets: batch });
+      await this.mailQueue.add(SEND_APPOINTMENT_REMINDER_JOB, { targets: batch }, MAIL_JOB_OPTIONS);
     }
   }
 }

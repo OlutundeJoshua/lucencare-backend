@@ -150,7 +150,10 @@ describe('EnrollmentsController', () => {
       const res = await request(app.getHttpServer()).post('/enrollments').send(validBody);
 
       expect(res.status).toBe(201);
-      expect(mockEnrollmentsService.createEnrollment).toHaveBeenCalledWith(TEST_PATIENT_USER_ID, validBody);
+      expect(mockEnrollmentsService.createEnrollment).toHaveBeenCalledWith(
+        TEST_PATIENT_USER_ID,
+        validBody,
+      );
     });
 
     it('returns 403 when RoleGuard denies access', async () => {
@@ -163,7 +166,9 @@ describe('EnrollmentsController', () => {
 
     it('returns 404 when service throws NotFoundException', async () => {
       app = await buildApp();
-      mockEnrollmentsService.createEnrollment.mockRejectedValue(new NotFoundException('Program not found'));
+      mockEnrollmentsService.createEnrollment.mockRejectedValue(
+        new NotFoundException('Program not found'),
+      );
 
       const res = await request(app.getHttpServer()).post('/enrollments').send(validBody);
 
@@ -202,7 +207,10 @@ describe('EnrollmentsController', () => {
       const res = await request(app.getHttpServer()).get(`/enrollments/${mockEnrollment.id}`);
 
       expect(res.status).toBe(200);
-      expect(mockEnrollmentsService.getEnrollment).toHaveBeenCalledWith(mockEnrollment.id, TEST_PATIENT_USER_ID);
+      expect(mockEnrollmentsService.getEnrollment).toHaveBeenCalledWith(
+        mockEnrollment.id,
+        TEST_PATIENT_USER_ID,
+      );
     });
 
     it('returns 403 when service throws ForbiddenException (not the owner)', async () => {
@@ -218,7 +226,9 @@ describe('EnrollmentsController', () => {
 
     it('returns 404 when service throws NotFoundException', async () => {
       app = await buildApp();
-      mockEnrollmentsService.getEnrollment.mockRejectedValue(new NotFoundException('Enrollment not found'));
+      mockEnrollmentsService.getEnrollment.mockRejectedValue(
+        new NotFoundException('Enrollment not found'),
+      );
 
       const res = await request(app.getHttpServer()).get(`/enrollments/${mockEnrollment.id}`);
 

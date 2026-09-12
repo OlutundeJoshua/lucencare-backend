@@ -7,6 +7,7 @@ import {
   SEND_APPOINTMENT_CONFIRMATION_JOB,
   SEND_APPOINTMENT_REMINDER_JOB,
   SEND_ENROLLMENT_OUTCOME_JOB,
+  SEND_ENROLLMENT_SUBMITTED_JOB,
   SEND_MEDICATION_REMINDER_EMAIL_JOB,
   SEND_OTP_JOB,
   SEND_PATIENT_CREDENTIALS_JOB,
@@ -18,6 +19,7 @@ import {
 
 import { SendApplicationStatusProcessor } from './send-application-status.processor';
 import { SendEnrollmentOutcomeProcessor } from './send-enrollment-outcome.processor';
+import { SendEnrollmentSubmittedProcessor } from './send-enrollment-submitted.processor';
 import { SendAppointmentConfirmationProcessor } from './send-appointment-confirmation.processor';
 import { SendAppointmentReminderProcessor } from './send-appointment-reminder.processor';
 import { SendMedicationReminderEmailProcessor } from './send-medication-reminder-email.processor';
@@ -39,6 +41,7 @@ export class MailQueueProcessor extends WorkerHost {
     private readonly sendResetPasswordProcessor: SendResetPasswordProcessor,
     private readonly sendApplicationStatusProcessor: SendApplicationStatusProcessor,
     private readonly sendEnrollmentOutcomeProcessor: SendEnrollmentOutcomeProcessor,
+    private readonly sendEnrollmentSubmittedProcessor: SendEnrollmentSubmittedProcessor,
     private readonly sendProgramStatusProcessor: SendProgramStatusProcessor,
   ) {
     super();
@@ -62,6 +65,8 @@ export class MailQueueProcessor extends WorkerHost {
         return this.sendResetPasswordProcessor.process(job);
       case SEND_APPLICATION_STATUS_JOB:
         return this.sendApplicationStatusProcessor.process(job);
+      case SEND_ENROLLMENT_SUBMITTED_JOB:
+        return this.sendEnrollmentSubmittedProcessor.process(job);
       case SEND_ENROLLMENT_OUTCOME_JOB:
         return this.sendEnrollmentOutcomeProcessor.process(job);
       case SEND_PROGRAM_STATUS_JOB:

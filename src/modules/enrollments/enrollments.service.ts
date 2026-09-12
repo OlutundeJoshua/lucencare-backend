@@ -6,6 +6,9 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { Queue } from 'bullmq';
+
+import { InjectQueue } from '@nestjs/bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 
@@ -29,6 +32,11 @@ import { Patient } from 'src/modules/patients/entities/patient.entity';
 import { Program } from 'src/modules/programs/entities/program.entity';
 import { Study } from 'src/modules/studies/entities/study.entity';
 import { User } from 'src/modules/auth/entities/user.entity';
+import {
+  MAIL_JOB_OPTIONS,
+  MAIL_QUEUE,
+  SEND_ENROLLMENT_SUBMITTED_JOB,
+} from 'src/queues/queues.constants';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
 
@@ -62,6 +70,9 @@ export class EnrollmentsService {
 
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+
+    @InjectQueue(MAIL_QUEUE)
+    private readonly mailQueue: Queue,
 
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
@@ -133,7 +144,10 @@ export class EnrollmentsService {
         throw new ConflictException('Patient is already actively enrolled in this program');
       }
 
-      const sharedDataSnapshot = this.buildSnapshot(patient, SNAPSHOT_FIELDS[ConsentPurpose.NGO_FUNDING]);
+      const sharedDataSnapshot = this.buildSnapshot(
+        patient,
+        SNAPSHOT_FIELDS[ConsentPurpose.NGO_FUNDING],
+      );
       const enrollment = manager.getRepository(Enrollment).create({
         patientId,
         programId: dto.programId,
@@ -169,31 +183,85 @@ export class EnrollmentsService {
       this.logger.error(`Failed to audit enrollment ${enrollment.id}: ${(err as Error).message}`);
     }
 
+    // Read once and shared by both notifications below. Fetched outside their guards
+    // so a failure to reach the NGO cannot also swallow the patient's acknowledgement.
+    let program: Program | null = null;
     try {
-      const program = await this.programRepo.findOne({
+      program = await this.programRepo.findOne({
         where: { id: enrollment.programId },
         select: ['id', 'orgId', 'title'],
       });
-      if (!program) return;
+    } catch (err) {
+      this.logger.error(
+        `Failed to read programme for enrollment ${enrollment.id}: ${(err as Error).message}`,
+      );
+    }
+    if (!program) return;
 
+    try {
       const staff = await this.userRepo.find({
         where: { orgId: program.orgId, role: UserRole.NGO_ADMIN },
         select: ['id'],
       });
-      if (staff.length === 0) return;
 
-      await this.notificationsService.createBulk(
-        staff.map((s) => s.id),
-        NotificationType.ENROLLMENT_APPLICATION,
-        {
-          enrollmentId: enrollment.id,
-          programId: program.id,
-          programTitle: program.title,
-        },
-      );
+      if (staff.length > 0) {
+        await this.notificationsService.createBulk(
+          staff.map((s) => s.id),
+          NotificationType.ENROLLMENT_APPLICATION,
+          {
+            enrollmentId: enrollment.id,
+            programId: program.id,
+            programTitle: program.title,
+          },
+        );
+      }
     } catch (err) {
       this.logger.error(
         `Failed to notify NGO of enrollment ${enrollment.id}: ${(err as Error).message}`,
+      );
+    }
+
+    await this.acknowledgeToPatient(enrollment, patientId, program.title);
+  }
+
+  /**
+   * Tell the patient their application landed.
+   *
+   * Every other applicant type on the platform gets a "we have received it" email;
+   * a patient applying to a programme used to get nothing, so the wait for a decision
+   * began in silence. Guarded like the rest of announceApplication: the enrollment has
+   * already committed, and a mail outage must not fail it.
+   */
+  private async acknowledgeToPatient(
+    enrollment: Enrollment,
+    patientId: string,
+    programTitle: string,
+  ): Promise<void> {
+    try {
+      const patient = await this.patientRepo.findOne({
+        where: { id: patientId },
+        select: ['id', 'userId', 'name'],
+      });
+      if (!patient) return;
+
+      const user = await this.userRepo.findOne({
+        where: { id: patient.userId },
+        select: ['id', 'email', 'name'],
+      });
+      if (!user) return;
+
+      await this.mailQueue.add(
+        SEND_ENROLLMENT_SUBMITTED_JOB,
+        {
+          to: user.email,
+          patientName: patient.name || user.name || user.email,
+          programTitle,
+        },
+        MAIL_JOB_OPTIONS,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Failed to acknowledge enrollment ${enrollment.id} to the patient: ${(err as Error).message}`,
       );
     }
   }
@@ -253,7 +321,10 @@ export class EnrollmentsService {
     return enrollment;
   }
 
-  async createStudyEnrollment(userId: string, dto: CreateStudyEnrollmentDto): Promise<StudyEnrollment> {
+  async createStudyEnrollment(
+    userId: string,
+    dto: CreateStudyEnrollmentDto,
+  ): Promise<StudyEnrollment> {
     const patientId = await this.resolvePatientId(userId);
     const patient = await this.patientRepo.findOne({ where: { id: patientId } });
     if (!patient) throw new NotFoundException('Patient profile not found');
@@ -265,9 +336,7 @@ export class EnrollmentsService {
       // the whole request down with a 500.
       await manager.query(`SELECT set_config('app.user_id', $1, true)`, [patientId]);
 
-      const study = await manager
-        .getRepository(Study)
-        .findOne({ where: { id: dto.studyId } });
+      const study = await manager.getRepository(Study).findOne({ where: { id: dto.studyId } });
       if (!study) throw new NotFoundException(`Study ${dto.studyId} not found`);
       if (study.status !== StudyStatus.APPROVED) {
         throw new UnprocessableEntityException('Study is not approved');
@@ -277,12 +346,16 @@ export class EnrollmentsService {
         .getRepository(ConsentGrant)
         .createQueryBuilder('cg')
         .where('cg.patient_id = :patientId', { patientId })
-        .andWhere('cg.purpose = :purpose', { purpose: ConsentPurpose.CLINICAL_RESEARCH_RECRUITMENT })
+        .andWhere('cg.purpose = :purpose', {
+          purpose: ConsentPurpose.CLINICAL_RESEARCH_RECRUITMENT,
+        })
         .andWhere('cg.status = :active', { active: ConsentStatus.ACTIVE })
         .andWhere('cg.deleted_at IS NULL')
         .getOne();
       if (!grant) {
-        throw new UnprocessableEntityException('No active CLINICAL_RESEARCH_RECRUITMENT consent grant');
+        throw new UnprocessableEntityException(
+          'No active CLINICAL_RESEARCH_RECRUITMENT consent grant',
+        );
       }
 
       const existing = await manager
@@ -294,7 +367,9 @@ export class EnrollmentsService {
         .andWhere('se.deleted_at IS NULL')
         .getOne();
       if (existing) {
-        throw new ConflictException('Patient already has an active interest or enrollment in this study');
+        throw new ConflictException(
+          'Patient already has an active interest or enrollment in this study',
+        );
       }
 
       const sharedDataSnapshot = this.buildSnapshot(
@@ -417,14 +492,15 @@ export class EnrollmentsService {
       .execute();
   }
 
-  async advanceStudyEnrollment(id: string, newStatus: StudyEnrollmentStatus): Promise<StudyEnrollment> {
+  async advanceStudyEnrollment(
+    id: string,
+    newStatus: StudyEnrollmentStatus,
+  ): Promise<StudyEnrollment> {
     const enrollment = await this.studyEnrollmentRepo.findOne({ where: { id } });
     if (!enrollment) throw new NotFoundException(`Study enrollment ${id} not found`);
 
     if (VALID_STUDY_TRANSITIONS[enrollment.status] !== newStatus) {
-      throw new ConflictException(
-        `Invalid state transition: ${enrollment.status} → ${newStatus}`,
-      );
+      throw new ConflictException(`Invalid state transition: ${enrollment.status} → ${newStatus}`);
     }
 
     enrollment.status = newStatus;

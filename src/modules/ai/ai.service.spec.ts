@@ -76,6 +76,20 @@ describe('AiService', () => {
     expect(body.messages[1]).toEqual({ role: 'user', content: history[0].content });
   });
 
+  // The portal renders only a subset of Markdown; anything outside it reaches the
+  // patient as stray characters, which is what the prompt has to prevent.
+  it('constrains the reply to the Markdown subset the portal can render', async () => {
+    await service.chat(USER_ID, history);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const systemPrompt = body.messages[0].content as string;
+
+    expect(systemPrompt).toContain('Formatting:');
+    for (const banned of ['tables', 'code blocks', 'links']) {
+      expect(systemPrompt).toContain(banned);
+    }
+  });
+
   it('sends the key as a bearer token to the configured provider URL', async () => {
     await service.chat(USER_ID, history);
 

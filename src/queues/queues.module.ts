@@ -36,6 +36,7 @@ import { SendAppointmentReminderProcessor } from './processors/send-appointment-
 import { SendPatientOnboardingWelcomeProcessor } from './processors/send-patient-onboarding-welcome.processor';
 import { SendApplicationStatusProcessor } from './processors/send-application-status.processor';
 import { SendEnrollmentOutcomeProcessor } from './processors/send-enrollment-outcome.processor';
+import { SendEnrollmentSubmittedProcessor } from './processors/send-enrollment-submitted.processor';
 import { SendProgramStatusProcessor } from './processors/send-program-status.processor';
 import { MailQueueProcessor } from './processors/mail-queue.processor';
 import { NotificationsQueueProcessor } from './processors/notifications-queue.processor';
@@ -95,6 +96,7 @@ import { MailModule } from 'src/modules/mail/mail.module';
     SendPatientOnboardingWelcomeProcessor,
     SendApplicationStatusProcessor,
     SendEnrollmentOutcomeProcessor,
+    SendEnrollmentSubmittedProcessor,
     SendProgramStatusProcessor,
     ApplicationReviewProcessor,
     CommunityReportProcessor,

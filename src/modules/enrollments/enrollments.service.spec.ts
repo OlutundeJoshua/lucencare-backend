@@ -1,4 +1,10 @@
-import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
+import { getQueueToken } from '@nestjs/bullmq';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager } from 'typeorm';
@@ -18,6 +24,7 @@ import { Program } from 'src/modules/programs/entities/program.entity';
 import { Study } from 'src/modules/studies/entities/study.entity';
 import { User } from 'src/modules/auth/entities/user.entity';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
+import { MAIL_QUEUE, SEND_ENROLLMENT_SUBMITTED_JOB } from 'src/queues/queues.constants';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { NotificationsService } from 'src/modules/notifications/notifications.service';
 
@@ -40,7 +47,7 @@ const makePatient = (overrides: Partial<Patient> = {}): Patient =>
     membershipNumber: 'HMO-001',
     deletedAt: undefined,
     ...overrides,
-  } as unknown as Patient);
+  }) as unknown as Patient;
 
 const makeProgram = (overrides: Partial<Program> = {}): Program =>
   ({
@@ -49,7 +56,7 @@ const makeProgram = (overrides: Partial<Program> = {}): Program =>
     expiresAt: new Date(Date.now() + 86_400_000), // 1 day from now
     eligibilityCriteria: [],
     ...overrides,
-  } as unknown as Program);
+  }) as unknown as Program;
 
 const makeStudy = (overrides: Partial<Study> = {}): Study =>
   ({
@@ -57,7 +64,7 @@ const makeStudy = (overrides: Partial<Study> = {}): Study =>
     status: StudyStatus.APPROVED,
     eligibilityCriteria: [],
     ...overrides,
-  } as unknown as Study);
+  }) as unknown as Study;
 
 const makeGrant = (overrides: Partial<ConsentGrant> = {}): ConsentGrant =>
   ({
@@ -67,7 +74,7 @@ const makeGrant = (overrides: Partial<ConsentGrant> = {}): ConsentGrant =>
     status: ConsentStatus.ACTIVE,
     dataScopes: SNAPSHOT_FIELDS[ConsentPurpose.NGO_FUNDING],
     ...overrides,
-  } as unknown as ConsentGrant);
+  }) as unknown as ConsentGrant;
 
 const makeEnrollment = (overrides: Partial<Enrollment> = {}): Enrollment =>
   ({
@@ -78,7 +85,7 @@ const makeEnrollment = (overrides: Partial<Enrollment> = {}): Enrollment =>
     status: EnrollmentStatus.ACTIVE,
     sharedDataSnapshot: {},
     ...overrides,
-  } as unknown as Enrollment);
+  }) as unknown as Enrollment;
 
 const makeStudyEnrollment = (overrides: Partial<StudyEnrollment> = {}): StudyEnrollment =>
   ({
@@ -90,7 +97,7 @@ const makeStudyEnrollment = (overrides: Partial<StudyEnrollment> = {}): StudyEnr
     sharedDataSnapshot: {},
     directContactShared: false,
     ...overrides,
-  } as unknown as StudyEnrollment);
+  }) as unknown as StudyEnrollment;
 
 // ── mock factory helpers ─────────────────────────────────────────────────────
 
@@ -122,8 +129,9 @@ function buildManagerMock({
   const mockQb: any = {
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
-    getOne: jest.fn()
-      .mockResolvedValueOnce(grant ?? null)       // consent grant query
+    getOne: jest
+      .fn()
+      .mockResolvedValueOnce(grant ?? null) // consent grant query
       .mockResolvedValueOnce(existingEnrollment ?? null), // existing enrollment query
   };
 
@@ -190,7 +198,7 @@ describe('EnrollmentsService', () => {
   // Post-commit announcement deps: the NGO learns an application arrived. Default
   // to "no programme / no staff" so existing tests take the early-return path.
   const mockProgramRepo = { findOne: jest.fn().mockResolvedValue(null) };
-  const mockUserRepo = { find: jest.fn().mockResolvedValue([]) };
+  const mockUserRepo = { find: jest.fn().mockResolvedValue([]), findOne: jest.fn() };
   const mockAuditService = { log: jest.fn().mockResolvedValue(undefined) };
   const mockNotificationsService = { createBulk: jest.fn().mockResolvedValue(undefined) };
 
@@ -199,6 +207,7 @@ describe('EnrollmentsService', () => {
     createQueryBuilder: jest.fn(),
   };
   const mockDataSource = { transaction: jest.fn() };
+  const mockMailQueue = { add: jest.fn().mockResolvedValue(undefined) };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -216,6 +225,7 @@ describe('EnrollmentsService', () => {
         { provide: AuditService, useValue: mockAuditService },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: DataSource, useValue: mockDataSource },
+        { provide: getQueueToken(MAIL_QUEUE), useValue: mockMailQueue },
       ],
     }).compile();
 
@@ -269,7 +279,11 @@ describe('EnrollmentsService', () => {
     });
 
     it('falls back to null / empty array for optional fields', () => {
-      const bare = makePatient({ address: undefined, medicationList: undefined, membershipNumber: undefined });
+      const bare = makePatient({
+        address: undefined,
+        medicationList: undefined,
+        membershipNumber: undefined,
+      });
       const result = service.buildSnapshot(
         bare,
         SNAPSHOT_FIELDS[ConsentPurpose.CLINICAL_RESEARCH_RECRUITMENT],
@@ -301,10 +315,89 @@ describe('EnrollmentsService', () => {
       const result = await service.createEnrollment(userId, dto);
       expect(result).toBe(saved);
       // set_config, not SET LOCAL: SET LOCAL cannot take a bind parameter.
-      expect(manager.query).toHaveBeenCalledWith(
-        `SELECT set_config('app.user_id', $1, true)`,
-        [patient.id],
-      );
+      expect(manager.query).toHaveBeenCalledWith(`SELECT set_config('app.user_id', $1, true)`, [
+        patient.id,
+      ]);
+    });
+
+    // Every other applicant type on the platform is told their submission landed;
+    // a patient applying to a programme used to hear nothing until a decision.
+    describe('acknowledgement to the patient', () => {
+      /** A successful application, with the programme and user rows the email needs. */
+      function arrangeSuccessfulApply() {
+        const { manager } = buildManagerMock({ program, grant, savedEntity: saved });
+        mockDataSource.transaction.mockImplementation((cb: Function) => cb(manager));
+        mockProgramRepo.findOne.mockResolvedValue({
+          id: program.id,
+          orgId: 'org-1',
+          title: 'Chronic Care Fund',
+        });
+        mockPatientRepo.findOne.mockResolvedValue({
+          id: patient.id,
+          userId,
+          name: 'Ada Obi',
+        });
+        mockUserRepo.findOne.mockResolvedValue({
+          id: userId,
+          email: 'patient@example.com',
+          name: 'Ada',
+        });
+      }
+
+      it('enqueues a submission email naming the programme', async () => {
+        arrangeSuccessfulApply();
+
+        await service.createEnrollment(userId, dto);
+
+        expect(mockMailQueue.add).toHaveBeenCalledWith(
+          SEND_ENROLLMENT_SUBMITTED_JOB,
+          {
+            to: 'patient@example.com',
+            patientName: 'Ada Obi',
+            programTitle: 'Chronic Care Fund',
+          },
+          expect.objectContaining({ attempts: 3 }),
+        );
+      });
+
+      it('falls back to the user record for a patient with no name', async () => {
+        arrangeSuccessfulApply();
+        mockPatientRepo.findOne.mockResolvedValue({ id: patient.id, userId, name: '' });
+
+        await service.createEnrollment(userId, dto);
+
+        expect(mockMailQueue.add.mock.calls[0][1].patientName).toBe('Ada');
+      });
+
+      // The enrollment has already committed by this point, so a mail outage must not
+      // surface as a failed application the patient would then retry into a 409.
+      it('still returns the enrollment when the mail queue is down', async () => {
+        arrangeSuccessfulApply();
+        mockMailQueue.add.mockRejectedValueOnce(new Error('redis unavailable'));
+
+        await expect(service.createEnrollment(userId, dto)).resolves.toBe(saved);
+      });
+
+      // The two notifications are independent: the NGO having no staff to notify is
+      // not a reason to leave the patient unacknowledged.
+      it('acknowledges the patient even when the NGO has no staff to notify', async () => {
+        arrangeSuccessfulApply();
+        mockUserRepo.find.mockResolvedValue([]);
+
+        await service.createEnrollment(userId, dto);
+
+        expect(mockNotificationsService.createBulk).not.toHaveBeenCalled();
+        expect(mockMailQueue.add).toHaveBeenCalled();
+      });
+
+      it('sends nothing when the programme row cannot be read', async () => {
+        arrangeSuccessfulApply();
+        mockProgramRepo.findOne.mockResolvedValue(null);
+
+        await service.createEnrollment(userId, dto);
+
+        expect(mockMailQueue.add).not.toHaveBeenCalled();
+      });
     });
 
     it('throws 404 when patient profile not found', async () => {
@@ -466,7 +559,10 @@ describe('EnrollmentsService', () => {
               andWhere: jest.fn().mockReturnThis(),
               getOne: jest.fn().mockResolvedValue(null),
             }),
-            create: jest.fn().mockImplementation((arg: any) => { capturedCreateArg = arg; return arg; }),
+            create: jest.fn().mockImplementation((arg: any) => {
+              capturedCreateArg = arg;
+              return arg;
+            }),
             save: jest.fn().mockResolvedValue(makeStudyEnrollment()),
           };
         }
@@ -474,14 +570,19 @@ describe('EnrollmentsService', () => {
       });
       mockDataSource.transaction.mockImplementation((cb: Function) => cb(manager));
 
-      await service.createStudyEnrollment(userId, { studyId: dto.studyId, shareDirectContact: false });
+      await service.createStudyEnrollment(userId, {
+        studyId: dto.studyId,
+        shareDirectContact: false,
+      });
       expect(capturedCreateArg).toMatchObject({ directContactShared: false });
     });
 
     it('throws 404 when study not found', async () => {
       const { manager } = buildManagerMock({ study: null, grant });
       mockDataSource.transaction.mockImplementation((cb: Function) => cb(manager));
-      await expect(service.createStudyEnrollment(userId, dto)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.createStudyEnrollment(userId, dto)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
 
     it('throws 422 when study is not APPROVED', async () => {
@@ -510,7 +611,9 @@ describe('EnrollmentsService', () => {
         existingStudyEnrollment: makeStudyEnrollment({ status: StudyEnrollmentStatus.SCREENED }),
       });
       mockDataSource.transaction.mockImplementation((cb: Function) => cb(manager));
-      await expect(service.createStudyEnrollment(userId, dto)).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.createStudyEnrollment(userId, dto)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
     });
   });
 
@@ -525,7 +628,9 @@ describe('EnrollmentsService', () => {
         where: jest.fn().mockReturnThis(),
         execute: executeMock,
       };
-      const manager = { createQueryBuilder: jest.fn().mockReturnValue(qb) } as unknown as EntityManager;
+      const manager = {
+        createQueryBuilder: jest.fn().mockReturnValue(qb),
+      } as unknown as EntityManager;
 
       await service.revokeByConsentGrant('grant-id-0000000000001', manager);
 
@@ -542,7 +647,9 @@ describe('EnrollmentsService', () => {
         where: jest.fn().mockReturnThis(),
         execute: jest.fn().mockResolvedValue({}),
       };
-      const manager = { createQueryBuilder: jest.fn().mockReturnValue(qb) } as unknown as EntityManager;
+      const manager = {
+        createQueryBuilder: jest.fn().mockReturnValue(qb),
+      } as unknown as EntityManager;
 
       await service.revokeByConsentGrant('grant-id-0000000000001', manager);
 
@@ -556,7 +663,10 @@ describe('EnrollmentsService', () => {
     it('transitions INTERESTED → SCREENED', async () => {
       const se = makeStudyEnrollment({ status: StudyEnrollmentStatus.INTERESTED });
       mockStudyEnrollmentRepo.findOne.mockResolvedValue(se);
-      mockStudyEnrollmentRepo.save.mockResolvedValue({ ...se, status: StudyEnrollmentStatus.SCREENED });
+      mockStudyEnrollmentRepo.save.mockResolvedValue({
+        ...se,
+        status: StudyEnrollmentStatus.SCREENED,
+      });
 
       const result = await service.advanceStudyEnrollment(se.id, StudyEnrollmentStatus.SCREENED);
       expect(result.status).toBe(StudyEnrollmentStatus.SCREENED);
@@ -565,7 +675,10 @@ describe('EnrollmentsService', () => {
     it('transitions SCREENED → ENROLLED', async () => {
       const se = makeStudyEnrollment({ status: StudyEnrollmentStatus.SCREENED });
       mockStudyEnrollmentRepo.findOne.mockResolvedValue(se);
-      mockStudyEnrollmentRepo.save.mockResolvedValue({ ...se, status: StudyEnrollmentStatus.ENROLLED });
+      mockStudyEnrollmentRepo.save.mockResolvedValue({
+        ...se,
+        status: StudyEnrollmentStatus.ENROLLED,
+      });
 
       const result = await service.advanceStudyEnrollment(se.id, StudyEnrollmentStatus.ENROLLED);
       expect(result.status).toBe(StudyEnrollmentStatus.ENROLLED);

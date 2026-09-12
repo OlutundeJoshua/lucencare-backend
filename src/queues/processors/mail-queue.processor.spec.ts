@@ -7,6 +7,7 @@ import {
   SEND_APPOINTMENT_CONFIRMATION_JOB,
   SEND_APPOINTMENT_REMINDER_JOB,
   SEND_ENROLLMENT_OUTCOME_JOB,
+  SEND_ENROLLMENT_SUBMITTED_JOB,
   SEND_MEDICATION_REMINDER_EMAIL_JOB,
   SEND_OTP_JOB,
   SEND_PATIENT_CREDENTIALS_JOB,
@@ -18,6 +19,7 @@ import {
 import { MailQueueProcessor } from './mail-queue.processor';
 import { SendApplicationStatusProcessor } from './send-application-status.processor';
 import { SendEnrollmentOutcomeProcessor } from './send-enrollment-outcome.processor';
+import { SendEnrollmentSubmittedProcessor } from './send-enrollment-submitted.processor';
 import { SendProgramStatusProcessor } from './send-program-status.processor';
 import { SendAppointmentConfirmationProcessor } from './send-appointment-confirmation.processor';
 import { SendAppointmentReminderProcessor } from './send-appointment-reminder.processor';
@@ -38,6 +40,7 @@ describe('MailQueueProcessor', () => {
   let sendResetPasswordProcessor: { process: jest.Mock };
   let sendApplicationStatusProcessor: { process: jest.Mock };
   let sendEnrollmentOutcomeProcessor: { process: jest.Mock };
+  let sendEnrollmentSubmittedProcessor: { process: jest.Mock };
   let sendProgramStatusProcessor: { process: jest.Mock };
 
   beforeEach(async () => {
@@ -50,6 +53,7 @@ describe('MailQueueProcessor', () => {
     sendResetPasswordProcessor = { process: jest.fn() };
     sendApplicationStatusProcessor = { process: jest.fn() };
     sendEnrollmentOutcomeProcessor = { process: jest.fn() };
+    sendEnrollmentSubmittedProcessor = { process: jest.fn() };
     sendProgramStatusProcessor = { process: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -73,6 +77,7 @@ describe('MailQueueProcessor', () => {
         { provide: SendResetPasswordProcessor, useValue: sendResetPasswordProcessor },
         { provide: SendApplicationStatusProcessor, useValue: sendApplicationStatusProcessor },
         { provide: SendEnrollmentOutcomeProcessor, useValue: sendEnrollmentOutcomeProcessor },
+        { provide: SendEnrollmentSubmittedProcessor, useValue: sendEnrollmentSubmittedProcessor },
         { provide: SendProgramStatusProcessor, useValue: sendProgramStatusProcessor },
       ],
     }).compile();
@@ -138,6 +143,12 @@ describe('MailQueueProcessor', () => {
     const job = { name: SEND_APPLICATION_STATUS_JOB, data: {} } as Job;
     await processor.process(job);
     expect(sendApplicationStatusProcessor.process).toHaveBeenCalledWith(job);
+  });
+
+  it('routes send_enrollment_submitted jobs to SendEnrollmentSubmittedProcessor', async () => {
+    const job = { name: SEND_ENROLLMENT_SUBMITTED_JOB, data: {} } as Job;
+    await processor.process(job);
+    expect(sendEnrollmentSubmittedProcessor.process).toHaveBeenCalledWith(job);
   });
 
   it('routes send_enrollment_outcome jobs to SendEnrollmentOutcomeProcessor', async () => {

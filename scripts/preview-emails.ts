@@ -26,6 +26,7 @@ import {
   SEND_APPOINTMENT_CONFIRMATION_JOB,
   SEND_APPOINTMENT_REMINDER_JOB,
   SEND_ENROLLMENT_OUTCOME_JOB,
+  SEND_ENROLLMENT_SUBMITTED_JOB,
   SEND_MEDICATION_REMINDER_EMAIL_JOB,
   SEND_OTP_JOB,
   SEND_PATIENT_CREDENTIALS_JOB,
@@ -41,6 +42,7 @@ import { SendApplicationStatusProcessor } from 'src/queues/processors/send-appli
 import { SendAppointmentConfirmationProcessor } from 'src/queues/processors/send-appointment-confirmation.processor';
 import { SendAppointmentReminderProcessor } from 'src/queues/processors/send-appointment-reminder.processor';
 import { SendEnrollmentOutcomeProcessor } from 'src/queues/processors/send-enrollment-outcome.processor';
+import { SendEnrollmentSubmittedProcessor } from 'src/queues/processors/send-enrollment-submitted.processor';
 import { SendMedicationReminderEmailProcessor } from 'src/queues/processors/send-medication-reminder-email.processor';
 import { SendOtpProcessor } from 'src/queues/processors/send-otp.processor';
 import { SendPatientCredentialsProcessor } from 'src/queues/processors/send-patient-credentials.processor';
@@ -160,6 +162,16 @@ async function collect(): Promise<void> {
       ),
     );
   }
+
+  await capture('enrollment-submitted', () =>
+    new SendEnrollmentSubmittedProcessor(mail, configService).process(
+      job(SEND_ENROLLMENT_SUBMITTED_JOB, {
+        to: 'ada@example.com',
+        patientName: 'Ada',
+        programTitle: 'Lagos Insulin Access Programme',
+      }),
+    ),
+  );
 
   for (const status of [
     EnrollmentStatus.SELECTED,
